@@ -81,7 +81,7 @@ def normalize(text: str) -> str:
     return "\n".join(lines)
 
 
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "").strip()
 
 
 def _get(url: str, kind: str) -> requests.Response:
@@ -96,18 +96,18 @@ def _get(url: str, kind: str) -> requests.Response:
         f"?api_key={SCRAPERAPI_KEY}&render=true&country_code=ru&url={quote(url, safe='')}"
     )
     last_exc = None
-    for attempt in range(4):
+    for attempt in range(2):
         try:
-            resp = requests.get(proxied, headers=HEADERS, timeout=90)
+            resp = requests.get(proxied, headers=HEADERS, timeout=60)
             if resp.status_code in (500, 429, 502, 503):
                 last_exc = requests.HTTPError(f"{resp.status_code} от ScraperAPI")
-                time.sleep(5 * (attempt + 1))
+                time.sleep(3)
                 continue
             resp.raise_for_status()
             return resp
         except requests.RequestException as e:
             last_exc = e
-            time.sleep(5 * (attempt + 1))
+            time.sleep(3)
     raise last_exc
 
 
