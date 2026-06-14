@@ -1,0 +1,47 @@
+name: Дайджест постов каналов WB/Ozon
+
+on:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt
+
+      - name: Прогон дайджеста постов
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          POSTS_STATE_PATH: data/posts_state.json
+        run: python posts_worker.py
+
+      - name: Сохранить состояние
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/ || true
+          if git diff --cached --quiet; then
+            echo "нет изменений"
+          else
+            git commit -m "posts state update [skip ci]"
+            git pull --rebase --autostash || true
+            git push
+          fi
