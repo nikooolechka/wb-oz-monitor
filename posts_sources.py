@@ -1,0 +1,97 @@
+"""Чтение постов Telegram-каналов через публичное веб-превью t.me/s/<канал>.
+
+Без симки, Telethon и API: страница t.me/s/ отдаёт последние ~16-20 постов
+канала с точной датой (<time datetime>), дословным текстом и живыми ссылками.
+Парсим сырой HTML — НЕ через LLM-пересказчик (тот теряет даты, искажает текст
+и домысливает).
+
+Чат (группа) через t.me/s/ не читается — такие источники сюда не добавлять,
+они уходят в этап с Telethon. @viktor_gamm_mp — это чат, поэтому его тут нет.
+"""
+from __future__ import annotations
+
+import re
+import os
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from html import unescape
+
+import requests
+
+# В песочнице исходящий трафик идёт через прокси с self-signed сертификатом,
+# поэтому для локальной калибровки можно выключить проверку (INSECURE_SSL=1).
+# На GitHub Actions проверка серта работает штатно — флаг там не ставить.
+VERIFY = os.environ.get("INSECURE_SSL") != "1"
+if not VERIFY:
+    requests.packages.urllib3.disable_warnings()  # type: ignore
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+    ),
+    "Accept-Language": "ru-RU,ru;q=0.9",
+}
+TIMEOUT = 30
+
+# 14 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
+CHANNELS = [
+    "rbordunov", "wbbillion", "dnative", "daryamelanich", "linnik_wb",
+    "prodazinawb", "petrochenkow", "marketplace_hogwarts", "ababruev",
+    "ozonmarketplace", "andrey_pro_business", "maksimenkoprobusines",
+    "ilya_krasinsky", "wildberriesru_official",
+]
+
+
+@dataclass(frozen=True)
+class Post:
+    channel: str
+    post_id: int           # монотонный id поста (из data-post="канал/ID")
+    dt: datetime           # время поста (UTC)
+    text: str              # дословный текст
+    links: tuple[str, ...] # внешние ссылки из поста
+
+
+def _clean(html_fragment: str) -> str:
+    h = html_fragment.replace("<br>", "\n").replace("<br/>", "\n")
+    h = re.sub(r"<[^>]+>", "", h)
+    return unescape(h).strip()
+
+
+def _parse(channel: str, page: str) -> list[Post]:
+    posts: list[Post] = []
+    blocks = re.split(r'<div class="tgme_widget_message_wrap', page)
+    for b in blocks[1:]:
+        mid = re.search(r'data-post="[^/]+/(\d+)"', b)
+        dt = re.search(r'<time[^>]*datetime="([^"]+)"', b)
+        if not (mid and dt):
+            continue
+        try:
+            t = datetime.fromisoformat(dt.group(1)).astimezone(timezone.utc)
+        except ValueError:
+            continue
+        tm = re.search(
+            r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>\s*'
+            r'<div class="tgme_widget_message_footer',
+            b, re.DOTALL,
+        ) or re.search(
+            r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>',
+            b, re.DOTALL,
+        )
+        raw = tm.group(1) if tm else ""
+        text = _clean(raw)
+        links = tuple(dict.fromkeys(
+            h for h in re.findall(r'href="(https?://[^"]+)"', raw)
+            if "t.me/" not in h  # внутренние ссылки на ТГ не тащим в дайджест
+        ))
+        posts.append(Post(channel, int(mid.group(1)), t, text, links))
+    return posts
+
+
+def fetch_channel(channel: str) -> list[Post]:
+    """Все посты с превью-страницы канала. Бросает исключение при сбое сети."""
+    resp = requests.get(
+        f"https://t.me/s/{channel}", headers=HEADERS, timeout=TIMEOUT, verify=VERIFY,
+    )
+    resp.raise_for_status()
+    return _parse(channel, resp.text)
