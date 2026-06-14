@@ -11,7 +11,11 @@
 Первый прогон (пустое состояние) = бэкфилл за неделю (POSTS_WINDOW_HOURS),
 далее дедуп по id → посуточно.
 
-Калибровка: POSTS_DRY_RUN=1 — печатать дайджест в stdout, не слать в Telegram.
+ПУБЛИКАЦИЯ ПОД ЗАЩИТОЙ: по умолчанию режим ПРЕВЬЮ — дайджест печатается в
+stdout и в группу НЕ отправляется, состояние НЕ двигается. Чтобы реально
+отправить в группу и зафиксировать обработанные посты — нужен POSTS_PUBLISH=1.
+Так облачный прогон сам по себе ничего не публикует (в workflow флага нет) —
+сначала ревью, потом публикация.
 """
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ import posts_classify as clf
 
 STATE_PATH = os.environ.get("POSTS_STATE_PATH", "data/posts_state.json")
 WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))  # первый прогон = неделя, далее дедуп по id
-DRY_RUN = os.environ.get("POSTS_DRY_RUN") == "1"
+PUBLISH = os.environ.get("POSTS_PUBLISH") == "1"  # без этого флага — только превью, в группу не шлём
 MSK = timezone(timedelta(hours=3))
 
 _ORDER = ["правила", "связка", "фишка", "кейс", "данные", "инструмент", "ресурс"]
@@ -139,22 +143,26 @@ def run_once() -> None:
 
     if entries:
         digest = build_digest(entries)
-        if DRY_RUN:
-            print("\n" + "=" * 60 + "\nДАЙДЖЕСТ (DRY_RUN, не отправлено):\n" + "=" * 60)
-            print(digest)
-        else:
+        if PUBLISH:
             notify.send(digest)
-            print(f"[ALERT] дайджест отправлен ({len(entries)} пунктов)", flush=True)
+            print(f"[ALERT] дайджест отправлен в группу ({len(entries)} пунктов)", flush=True)
+        else:
+            print("\n" + "=" * 60 + "\nПРЕВЬЮ ДАЙДЖЕСТА (в группу НЕ отправлено, ждёт ревью):\n" + "=" * 60)
+            print(digest)
     else:
-        print("[INFO] за период ничего не прошло порог — дайджест не шлём", flush=True)
+        print("[INFO] за период ничего не прошло порог — дайджеста нет", flush=True)
 
-    _save(state)
-
-    if first_run and not DRY_RUN:
-        notify.send(
-            "✅ <b>Мониторинг постов каналов запущен</b>\n"
-            f"Слежу за {len(src.CHANNELS)} каналами, дайджест раз в сутки."
-        )
+    # Состояние двигаем (помечаем посты обработанными) ТОЛЬКО при реальной публикации,
+    # иначе превью «съело бы» посты и при публикации их бы уже не было.
+    if PUBLISH:
+        _save(state)
+        if first_run:
+            notify.send(
+                "✅ <b>Мониторинг постов каналов запущен</b>\n"
+                f"Слежу за {len(src.CHANNELS)} каналами."
+            )
+    else:
+        print("[PREVIEW] состояние НЕ сохранено — посты остаются для публикации после ревью", flush=True)
 
 
 if __name__ == "__main__":
