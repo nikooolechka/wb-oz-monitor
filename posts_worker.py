@@ -8,6 +8,9 @@
 Состояние постов — отдельный файл (data/posts_state.json), чтобы не
 конфликтовать с состоянием оферты (data/state.json).
 
+Первый прогон (пустое состояние) = бэкфилл за неделю (POSTS_WINDOW_HOURS),
+далее дедуп по id → посуточно.
+
 Калибровка: POSTS_DRY_RUN=1 — печатать дайджест в stdout, не слать в Telegram.
 """
 from __future__ import annotations
@@ -25,7 +28,7 @@ import posts_sources as src
 import posts_classify as clf
 
 STATE_PATH = os.environ.get("POSTS_STATE_PATH", "data/posts_state.json")
-WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "48"))
+WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))  # первый прогон = неделя, далее дедуп по id
 DRY_RUN = os.environ.get("POSTS_DRY_RUN") == "1"
 MSK = timezone(timedelta(hours=3))
 
