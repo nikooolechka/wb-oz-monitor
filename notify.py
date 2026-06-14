@@ -6,8 +6,10 @@ import time
 
 import requests
 
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+# .strip() — секреты часто копируют с лишним переносом строки/пробелом,
+# из-за чего адрес Telegram становится битым (bot<token>%0A) → 404.
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 API = "https://api.telegram.org"
 
 
