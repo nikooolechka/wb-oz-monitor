@@ -41,13 +41,17 @@ SOURCES: list[Source] = [
         url="https://static-basket-02.wb.ru/vol20/offers/prd/product/latest.pdf",
         kind="pdf",
     ),
-    Source(
-        key="oz_b2b_standard_terms",
-        platform="OZON",
-        title="Ozon — Условия договора поставки (B2B, для продавцов)",
-        url="https://docs.ozon.ru/legal/partners/b2b/standard-terms/",
-        kind="html",
-    ),
+    # Ozon (docs.ozon.ru) временно отключён: жёсткий антибот блокирует
+    # серверные запросы и ловит даже headless-браузеры с резидентными IP
+    # (проверено: прямой, ScraperAPI 0/5, ScrapingAnt 0/5). Бесплатно
+    # стабильно спарсить нельзя. Ozon-изменения — в Этапе 2 (канал/кабинет).
+    # Source(
+    #     key="oz_b2b_standard_terms",
+    #     platform="OZON",
+    #     title="Ozon — Условия договора поставки (B2B)",
+    #     url="https://docs.ozon.ru/legal/partners/b2b/standard-terms/",
+    #     kind="html",
+    # ),
 ]
 
 
