@@ -5,17 +5,14 @@
 АС Фарм и собирает дайджест: только то, что прошло порог, с аргументами,
 цифрами и живыми ссылками. БЕЗ лимита числа — выдаёт всё, что прошло.
 
+Дайджест всегда ЗА ВЧЕРА (завершённые сутки): сегодняшние посты не берём —
+они попадут в завтрашний прогон.
+
 Состояние постов — отдельный файл (data/posts_state.json), чтобы не
 конфликтовать с состоянием оферты (data/state.json).
 
-Первый прогон (пустое состояние) = бэкфилл за неделю (POSTS_WINDOW_HOURS),
-далее дедуп по id → посуточно.
-
 РЕЖИМ: по умолчанию АВТОПУБЛИКАЦИЯ — дайджест уходит в группу и состояние
-двигается (посты помечаются обработанными). Для ручного превью без отправки —
-POSTS_PREVIEW=1 (печатает в stdout, в группу не шлёт, состояние не трогает).
-Облачный прогон работает автономно (флага нет → публикует); превью для
-доводки запускаем локально с POSTS_PREVIEW=1.
+двигается. Для ручного превью без отправки — POSTS_PREVIEW=1.
 """
 from __future__ import annotations
 
@@ -61,8 +58,15 @@ def _save(state: dict) -> None:
 
 
 def collect_new(state: dict) -> tuple[list[src.Post], dict]:
-    """Возвращает (новые посты к разбору, обновлённое состояние last_id)."""
+    """Возвращает (новые посты к разбору, обновлённое состояние last_id).
+
+    Дайджест — за ЗАВЕРШЁННЫЕ сутки: берём посты строго ДО сегодняшней даты
+    (МСК). Сегодняшние посты не трогаем — они уйдут в завтрашний дайджест
+    «за вчера». Состояние двигаем только по включённым постам, иначе сегодняшние
+    оказались бы «обработанными» и никогда не попали бы в дайджест.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=WINDOW_HOURS)
+    today = datetime.now(MSK).date()
     new_posts: list[src.Post] = []
     for ch in src.CHANNELS:
         try:
@@ -73,14 +77,17 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
         if not posts:
             continue
         last_id = state.get(ch)
-        max_id = max(p.post_id for p in posts)
         if last_id is None:
-            # первый запуск канала: берём только окно, остальное — baseline
-            fresh = [p for p in posts if p.dt >= cutoff]
+            cand = [p for p in posts if p.dt >= cutoff]
         else:
-            fresh = [p for p in posts if p.post_id > last_id]
-        new_posts.extend(fresh)
-        state[ch] = max(max_id, last_id or 0)
+            cand = [p for p in posts if p.post_id > last_id]
+        # только завершённые сутки: строго до сегодняшней даты (МСК)
+        eligible = [p for p in cand if p.dt.astimezone(MSK).date() < today]
+        new_posts.extend(eligible)
+        if eligible:
+            state[ch] = max(p.post_id for p in eligible)
+        elif last_id is not None:
+            state[ch] = last_id  # сегодняшние посты ждут завтрашнего прогона
     new_posts.sort(key=lambda p: p.dt)
     return new_posts, state
 
@@ -108,9 +115,6 @@ def build_digest(entries: list[dict]) -> str:
                 f"{_esc(r.get('argument',''))}\n"
                 f"🎯 Нам: {_esc(r.get('apply',''))}"
             )
-            # Ссылки показываем только для ресурсов/инструментов, где ссылка и
-            # есть ценность. В постах-советах ссылка обычно — рекламный CTA канала
-            # (реф-боты, промо аналитики), его не тащим.
             if p.links and cat in ("ресурс", "инструмент"):
                 block += "\n🔗 " + _esc(" | ".join(p.links[:5]))
             parts.append(block)
@@ -152,8 +156,6 @@ def run_once() -> None:
     else:
         print("[INFO] за период ничего не прошло порог — дайджеста нет", flush=True)
 
-    # Состояние двигаем (помечаем посты обработанными) ТОЛЬКО при реальной публикации,
-    # иначе превью «съело бы» посты и при публикации их бы уже не было.
     if PREVIEW:
         print("[PREVIEW] состояние НЕ сохранено — превью, посты остаются", flush=True)
     else:
