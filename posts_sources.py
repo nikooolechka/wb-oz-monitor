@@ -34,12 +34,15 @@ HEADERS = {
 }
 TIMEOUT = 30
 
-# 14 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
+# 20 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
 CHANNELS = [
     "rbordunov", "wbbillion", "dnative", "daryamelanich", "linnik_wb",
     "prodazinawb", "petrochenkow", "marketplace_hogwarts", "ababruev",
     "ozonmarketplace", "andrey_pro_business", "maksimenkoprobusines",
     "ilya_krasinsky", "wildberriesru_official",
+    # добавлены 2026-06-15 пользователем
+    "burlak_na_mp", "kultura_analitiki", "ozonmaximal", "ozonwoman",
+    "roma_iz_sellium", "kogteva_pro_ozon",
 ]
 
 
