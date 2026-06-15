@@ -1,9 +1,9 @@
-name: Проверка оферт и правил WB/Ozon
+name: Проверка оферт WB+Ozon
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "0 8 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,24 +22,21 @@ jobs:
           python-version: "3.12"
       - name: Install deps
         run: pip install -r requirements.txt
-      - name: Run once
+      - name: WB
         env:
-          RUN_ONCE: "1"
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
-          STATE_PATH: data/state.json
-        run: python worker.py
-      - name: Save state
-        run: |
-          git config user.name  "monitor-bot"
-          git config user.email "monitor-bot@users.noreply.github.com"
-          git add data/ || true
-          if ! git diff --cached --quiet; then
-            git commit -m "state update [skip ci]"
-            git push
-          else
-            echo "no state change"
-          fi
-          
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: nikooolechka/wb-oz-monitor
+        run: python wb_local.py
+      - name: Ozon
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPO: nikooolechka/wb-oz-monitor
+          SCRAPFLY_KEY: ${{ secrets.SCRAPFLY_KEY }}
+        run: python ozon_local.py
+
