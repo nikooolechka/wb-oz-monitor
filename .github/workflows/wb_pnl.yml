@@ -1,0 +1,28 @@
+name: WB P&L
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * *'   # 10:00 МСК ежедневно
+jobs:
+  pnl:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Считаю P&L WB
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          PERIOD_FROM: '2026-06-01'
+          PERIOD_TO: '2026-06-07'
+        run: python wb_report_api.py
+      - name: Сохраняю отчёт в репозиторий
+        run: |
+          git config user.name "wb-pnl-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/reports/ data/wb/ || true
+          git commit -m "WB P&L 1-7 июня" || echo "нет изменений"
+          git push
