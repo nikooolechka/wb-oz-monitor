@@ -40,7 +40,7 @@ def send(text: str) -> None:
     """
     if not TOKEN or not CHAT_ID:
         raise RuntimeError("Не заданы TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
-    limit = 3800
+    limit = 4096  # потолок Telegram; готовые блоки дайджеста ≤4050 уходят целиком, цитаты не рвутся
     chunk = ""
     for line in text.split("\n"):
         # одиночная строка длиннее лимита — режем жёстко (редкий край)
