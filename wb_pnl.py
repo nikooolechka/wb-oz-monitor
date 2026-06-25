@@ -1,14 +1,12 @@
 """P&L WB из собственного кэша WB-данных (НЕ из дашборда).
 
-Методика (сверено на мае 2026, эталон — МП Профит):
-  Прибыль = Выплата(accrual) − Себес − Налог
-  - Выплата = из отчёта реализации WB (accrual, к перечислению за период)
-  - Себес   = выкупы(Продажа−Возврат по SKU) × закуп; ЗАКУП — конфиг ниже
-              (это данные продавца, в WB API их нет; эталон значений — вкладка
-               «юнит-экономика» дашборда, держим копию здесь)
-  - Налог   = 11% × Сумма реализации
-  - Реклама отдельной строкой НЕ вычитается (на WB она уже в удержаниях),
-    но ДРР% показываем = реклама_факт / реализация.
+Методика (единый принцип — см. project_pnl_accounting_principle):
+  Прибыль = Выплата − Себес − Налог
+  - Каждая операция относится к периоду по ДАТЕ СОБЫТИЯ (sale_dt — дата выкупа),
+    а не по дате отчёта/списания. Тянем период С ЗАПАСОМ вперёд (buffer_days),
+    фильтруем по sale_dt → поздно списанные расходы/возвраты падают в месяц продажи.
+  - Себес = выкуп(по дате)×закуп (конфиг SEBES, из юнит-экономики дашборда).
+  - Налог = 11% × реализация. Реклама уже в удержаниях — отдельно не вычитать.
 """
 from __future__ import annotations
 
@@ -56,10 +54,15 @@ def fetch_ad_spend(date_from: str, date_to: str) -> float:
                if date_from <= (x.get("updTime") or "")[:10] <= date_to)
 
 
-def compute_pnl(date_from: str, date_to: str, *, ad_spend: float | None = None) -> dict:
-    rows = wf.fetch_realization(date_from, date_to)
-    # строго выкуп по дате продажи (sale_dt) — без хвостов недельного отчёта
-    # (заказали и получили-оплатили В этом периоде; «ещё едет» в реализацию не попадает)
+def compute_pnl(date_from: str, date_to: str, *, ad_spend: float | None = None,
+                buffer_days: int = 21) -> dict:
+    import datetime
+    # Тянем ШИРЕ периода (+buffer вперёд): логистика/штрафы/возвраты по продажам
+    # периода часто списываются на 1–2 недели позже и падают в более поздний отчёт.
+    # Затем фильтруем строго по дате выкупа sale_dt → расход/возврат попадает в МЕСЯЦ
+    # ПРОДАЖИ, где бы WB его ни списал. Так ничего не теряется и не липнет к чужому месяцу.
+    fetch_to = (datetime.date.fromisoformat(date_to) + datetime.timedelta(days=buffer_days)).isoformat()
+    rows = wf.fetch_realization(date_from, fetch_to)
     rows = [r for r in rows if date_from <= (r.get("sale_dt") or "")[:10] <= date_to]
     S = lambda f: sum(float(r.get(f) or 0) for r in rows)
 
@@ -96,7 +99,7 @@ def _f(x): return f"{x:,.0f}".replace(",", " ")
 
 
 def print_pnl(p: dict) -> None:
-    print(f"\n===== P&L WB — {p['period']} (accrual, из WB API) =====")
+    print(f"\n===== P&L WB — {p['period']} (по дате выкупа, из WB API) =====")
     print(f"Реализация (налог. база) : {_f(p['realization']):>12}")
     print(f"Выкуплено, шт            : {p['units']:>12}")
     print(f"Выплата (к перечислению) : {_f(p['payout']):>12}")
