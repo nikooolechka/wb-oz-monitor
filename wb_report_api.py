@@ -1,8 +1,9 @@
 """Облачный раннер: считает WB-API сторону P&L за период и кладёт отчёт в data/reports/.
 
-Запускается в GitHub Actions (.github/workflows/wb_pnl.yml). Период — env
-PERIOD_FROM/PERIOD_TO; WB-токен — секрет WB_TOKEN. Дашборд-сторона тут НЕ
-считается (её собираем на маке при открытии — мгновенно, без бана).
+Период берётся из data/period.json ({"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}),
+иначе из env PERIOD_FROM/PERIOD_TO, иначе дефолт. Сменить период = править
+data/period.json (обычный файл, не workflow) и запустить workflow вручную.
+Дашборд-сторону тут НЕ считаем — собираем на месте при сверке.
 """
 from __future__ import annotations
 import os
@@ -10,9 +11,19 @@ import json
 import pathlib
 import wb_pnl
 
-DF = os.environ.get("PERIOD_FROM", "2026-06-01")
-DT = os.environ.get("PERIOD_TO", "2026-06-07")
 
+def _period():
+    p = pathlib.Path("data/period.json")
+    if p.exists():
+        try:
+            d = json.loads(p.read_text())
+            return d["from"], d["to"]
+        except Exception:
+            pass
+    return os.environ.get("PERIOD_FROM", "2026-06-01"), os.environ.get("PERIOD_TO", "2026-06-07")
+
+
+DF, DT = _period()
 p = wb_pnl.compute_pnl(DF, DT)
 out = pathlib.Path("data/reports")
 out.mkdir(parents=True, exist_ok=True)
