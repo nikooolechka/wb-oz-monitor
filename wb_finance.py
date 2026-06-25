@@ -2,8 +2,13 @@
 
 Источник истины — WB API напрямую (statistics-api). Тянем РАЗ за период и
 кэшируем в data/wb/, чтобы не ходить в WB повторно и не упираться в лимит.
-Лимит reportDetailByPeriod = 1 запрос/мин. На 429: читать X-Ratelimit-Retry и
-ждать ровно столько, один повтор. Токен — из env WB_TOKEN.
+
+Лимит reportDetailByPeriod очень строгий. Дисциплина 429: НЕ повторять вообще —
+на 429 сразу выход с ошибкой. Любой повтор во время бана продлевает кулдаун.
+Период тянем ОДИН раз и кэшируем навсегда; под запрос — читаем кэш, WB не дёргаем.
+
+Токен — из env WB_TOKEN (в GitHub Actions — секрет; локально — ~/.wb-oz-monitor/.env).
+Себестоимость тут НЕ трогаем: это закуп продавца, не данные WB (см. wb_pnl.py).
 """
 from __future__ import annotations
 
@@ -13,11 +18,10 @@ import time
 import pathlib
 import urllib.request
 import urllib.error
-import ssl
 
 BASE = "https://statistics-api.wildberries.ru"
 CACHE_DIR = pathlib.Path(__file__).parent / "data" / "wb"
-INSECURE = os.environ.get("INSECURE_SSL") == "1"
+INSECURE = os.environ.get("INSECURE_SSL") == "1"  # только для песочницы
 
 
 def _token() -> str:
@@ -27,10 +31,19 @@ def _token() -> str:
     return t
 
 
-def _get(path: str, params: dict):
+def _get(path: str, params: dict) -> tuple[int, list | dict, dict]:
+    """Один GET. Возвращает (http_code, body, headers). Без ретраев внутри."""
+    import ssl
     qs = "&".join(f"{k}={v}" for k, v in params.items())
     req = urllib.request.Request(f"{BASE}{path}?{qs}", headers={"Authorization": _token()})
-    ctx = ssl._create_unverified_context() if INSECURE else None
+    if INSECURE:
+        ctx = ssl._create_unverified_context()
+    else:
+        try:
+            import certifi
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            ctx = ssl.create_default_context()
     try:
         with urllib.request.urlopen(req, timeout=180, context=ctx) as r:
             return r.status, json.loads(r.read() or b"null"), dict(r.headers)
@@ -39,6 +52,11 @@ def _get(path: str, params: dict):
 
 
 def fetch_realization(date_from: str, date_to: str, *, refresh: bool = False) -> list:
+    """Отчёт реализации за период. Кэшируется в data/wb/realization_<from>_<to>.json.
+
+    На 429 — СРАЗУ выход с ошибкой, БЕЗ сна и повторов (автоповтор в бане продлевает бан).
+    Пагинация по rrdid с паузой 61с между страницами (лимит 1/мин).
+    """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cache = CACHE_DIR / f"realization_{date_from}_{date_to}.json"
     if cache.exists() and not refresh:
@@ -46,19 +64,16 @@ def fetch_realization(date_from: str, date_to: str, *, refresh: bool = False) ->
 
     rows: list = []
     rrd = 0
-    waited_429 = False
     while True:
         code, body, hdr = _get("/api/v5/supplier/reportDetailByPeriod",
                                {"dateFrom": date_from, "dateTo": date_to,
                                 "limit": 100000, "rrdid": rrd})
         if code == 429:
             retry = int(hdr.get("X-Ratelimit-Retry") or hdr.get("Retry-After") or 60)
-            if waited_429:
-                raise RuntimeError(f"WB всё ещё 429 после ожидания (retry={retry}с) — повтор по расписанию")
-            print(f"[429] жду X-Ratelimit-Retry={retry}с, без повторных стуков", flush=True)
-            time.sleep(retry + 2)
-            waited_429 = True
-            continue
+            raise RuntimeError(
+                f"WB 429 (бан rate-limit). НЕ повторять автоматически — продлевает бан. "
+                f"Вручную не раньше ~{retry}с (~{retry//3600}ч {retry%3600//60}м). "
+                f"Кэш появится после успешного ручного запуска.")
         if code != 200:
             raise RuntimeError(f"WB HTTP {code}: {str(body)[:200]}")
         if not isinstance(body, list) or not body:
@@ -67,11 +82,11 @@ def fetch_realization(date_from: str, date_to: str, *, refresh: bool = False) ->
         if len(body) < 100000:
             break
         rrd = body[-1]["rrd_id"]
-        print(f"[pager] +{len(body)} строк, пауза 61с", flush=True)
+        print(f"[pager] +{len(body)} строк, пауза 61с (лимит 1/мин)", flush=True)
         time.sleep(61)
 
     cache.write_text(json.dumps(rows, ensure_ascii=False))
-    print(f"[ok] реализация {date_from}..{date_to}: {len(rows)} строк", flush=True)
+    print(f"[ok] реализация {date_from}..{date_to}: {len(rows)} строк → {cache.name}", flush=True)
     return rows
 
 
