@@ -91,36 +91,43 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
     return new_posts, state
 
 
-def build_digest(entries: list[dict]) -> str:
+def build_digest(entries: list[dict]) -> list[str]:
+    """Новый вид: заголовок «🗞 Дайджест за DD.MM · N тем» и сразу нумерованные
+    РАЗВОРАЧИВАЮЩИЕСЯ цитаты (<blockquote expandable>) — каждая свёрнута, читатель
+    раскрывает только интересные. Возвращает список сообщений (упаковка по максимуму,
+    цитаты не рвём; потолок Telegram 4096)."""
     dates = sorted({e["post"].dt.astimezone(MSK).date() for e in entries})
     if len(dates) <= 1:
-        per = (dates[0] if dates else datetime.now(MSK).date()).strftime("%d.%m.%Y")
-        head = f"🗞 <b>Дайджест каналов за {per}</b>"
+        per = (dates[0] if dates else datetime.now(MSK).date()).strftime("%d.%m")
     else:
-        head = (f"🗞 <b>Дайджест каналов за период "
-                f"{dates[0].strftime('%d.%m')}–{dates[-1].strftime('%d.%m.%Y')}</b>")
-    by_cat: dict[str, list[dict]] = {}
-    for e in entries:
-        by_cat.setdefault(e["res"].get("category", "фишка"), []).append(e)
+        per = f"{dates[0].strftime('%d.%m')}–{dates[-1].strftime('%d.%m')}"
+    header = f"🗞 <b>Дайджест за {per} · {len(entries)} тем</b>"
 
-    parts = [head]
-    cats = [c for c in _ORDER if c in by_cat] + [c for c in by_cat if c not in _ORDER]
-    for cat in cats:
-        for e in by_cat[cat]:
-            r, p = e["res"], e["post"]
-            block = (
-                f"\n{clf.emoji(cat)} <b>{_esc(r.get('headline',''))}</b>\n"
-                f"<i>@{p.channel}</i>\n"
-                f"{_esc(r.get('argument',''))}\n"
-                f"🎯 Нам: {_esc(r.get('apply',''))}"
-            )
-            # Ссылки показываем только для ресурсов/инструментов, где ссылка и
-            # есть ценность. В постах-советах ссылка обычно — рекламный CTA канала
-            # (реф-боты, промо аналитики), его не тащим.
-            if p.links and cat in ("ресурс", "инструмент"):
-                block += "\n🔗 " + _esc(" | ".join(p.links[:5]))
-            parts.append(block)
-    return "\n".join(parts)
+    def quote(i: int, e: dict) -> str:
+        r, p = e["res"], e["post"]
+        arg = _esc(r.get("argument", ""))
+        if len(arg) > 700:
+            arg = arg[:700].rstrip() + "…"
+        b = (f"<b>{i}. {_esc(r.get('headline',''))}</b>\n"
+             f"<i>@{p.channel} · {p.dt.astimezone(MSK).strftime('%d.%m')}</i>\n"
+             f"{arg}\n"
+             f"🎯 Нам: {_esc(r.get('apply',''))}")
+        if p.links and r.get("category") in ("ресурс", "инструмент"):
+            b += "\n🔗 " + _esc(" | ".join(p.links[:5]))
+        return f"<blockquote expandable>{b}</blockquote>"
+
+    chunks: list[str] = []
+    buf = header
+    for i, e in enumerate(entries, 1):
+        q = quote(i, e)
+        if len(buf) + len(q) + 1 > 4050:
+            chunks.append(buf)
+            buf = q
+        else:
+            buf = f"{buf}\n{q}" if buf else q
+    if buf:
+        chunks.append(buf)
+    return chunks
 
 
 def _esc(s: str) -> str:
@@ -148,13 +155,15 @@ def run_once() -> None:
                 entries.append({"post": p, "res": res})
 
     if entries:
-        digest = build_digest(entries)
+        chunks = build_digest(entries)
         if PREVIEW:
             print("\n" + "=" * 60 + "\nПРЕВЬЮ ДАЙДЖЕСТА (в группу НЕ отправлено):\n" + "=" * 60)
-            print(digest)
+            for c in chunks:
+                print(c)
         else:
-            notify.send(digest)
-            print(f"[ALERT] дайджест отправлен в группу ({len(entries)} пунктов)", flush=True)
+            for c in chunks:
+                notify.send(c)
+            print(f"[ALERT] дайджест отправлен в группу ({len(entries)} пунктов, {len(chunks)} сообщ.)", flush=True)
     else:
         if PREVIEW:
             print("[PREVIEW] пусто — в группу ушло бы: " + NOTHING_MSG, flush=True)
