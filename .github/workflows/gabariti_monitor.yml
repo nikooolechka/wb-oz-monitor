@@ -2,8 +2,8 @@ name: Монитор габаритов (юнитки → канал измен�
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # ежедневно 06:00 UTC = 09:00 МСК
-  workflow_dispatch:        # кнопка ручного запуска (для теста)
+    - cron: "*/30 * * * *"   # каждые 30 минут — ловит изменения само, без ручного запуска
+  workflow_dispatch:          # кнопка ручного запуска (для мгновенного теста)
 
 # нужно, чтобы воркер мог коммитить снимок состояния обратно
 permissions:
@@ -21,6 +21,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - run: pip install -r requirements.txt
       - name: Прогон монитора габаритов
         env:
