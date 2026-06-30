@@ -1,0 +1,32 @@
+name: 1C recipes → МАТРИЦА
+
+# Еженедельная сверка карточек товара из выгрузки 1С (письмо Mail.ru) с
+# таблицей ОП АС Фарм → МАТРИЦА. Выгрузка приходит по пятницам ~18:00 МСК,
+# поэтому запуск в субботу утром. Можно запустить вручную (workflow_dispatch),
+# в т.ч. в режиме DRY-RUN (ничего не меняет).
+
+on:
+  schedule:
+    - cron: "0 4 * * 6"   # суббота 04:00 UTC = 07:00 МСК
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "DRY-RUN (1 = только показать, ничего не менять)"
+        required: false
+        default: "0"
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Сверка 1С → МАТРИЦА
+        env:
+          MAILRU_APP_PASS: ${{ secrets.MAILRU_APP_PASS }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: python recipes_1c.py
