@@ -164,6 +164,25 @@ def _esc(s):
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _liter(v):
+    # Логистика Ozon округляет объём вверх до ЦЕЛОГО литра (проверено по реальным
+    # списаниям: внутри одного литра — та же цена; ступени по целым литрам).
+    return math.ceil(round(v, 6))
+
+
+def classify(oz_vol, et_vol):
+    """ДВА сигнала: (1) логистика — сменился ли целый литр; (2) штраф ОВХ —
+    карточка ниже эталона на ≥0,6 л. Тревога, если сработал любой."""
+    cl, el = _liter(oz_vol), _liter(et_vol)
+    gap = et_vol - oz_vol
+    fee = ovh_fee(gap) if gap > 0 else 0
+    if cl > el:
+        return "high"
+    if cl < el or fee > 0:
+        return "low"
+    return "ok"
+
+
 def build_digest(items):
     """Одно сообщение на прогон по ВСЕМ изменившимся артикулам."""
     highs = [i for i in items if i["status"] == "high"]
