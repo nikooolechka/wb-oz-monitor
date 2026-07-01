@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "0 6 * * *"   # ежедневно, 9:00 МСК
   workflow_dispatch:
+    inputs:
+      send_now:
+        description: "1 = отправить текущие несоответствия одним сообщением"
+        default: ""
 
 permissions:
   contents: write
@@ -30,6 +34,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_PATH: data/oz_gabariti_state.json
+          SEND_NOW: ${{ github.event.inputs.send_now }}
           MIN_DELTA_L: "0.05"
         run: python oz_gabariti_monitor.py
       - name: Сохранить снимок обратно
