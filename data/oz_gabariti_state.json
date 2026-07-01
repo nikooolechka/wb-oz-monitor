@@ -1,0 +1,114 @@
+{
+  "skus": {
+    "Cryolipolysis50": {
+      "status": "low",
+      "oz_dims": "37×18,5×22,5",
+      "oz_vol": 15.401
+    },
+    "cryolipolysis25": {
+      "status": "low",
+      "oz_dims": "22,5×18,5×18,5",
+      "oz_vol": 7.701
+    },
+    "Dental20": {
+      "status": "ok",
+      "oz_dims": "13×6,5×2,5",
+      "oz_vol": 0.211
+    },
+    "CrioGel1l": {
+      "status": "high",
+      "oz_dims": "26×8,5×8,5",
+      "oz_vol": 1.879
+    },
+    "CrioL50": {
+      "status": "low",
+      "oz_dims": "37×18,5×22,5",
+      "oz_vol": 15.401
+    },
+    "Dental50": {
+      "status": "low",
+      "oz_dims": "13,5×11×6",
+      "oz_vol": 0.891
+    },
+    "OptikaSpray_new": {
+      "status": "low",
+      "oz_dims": "20,3×5,5×5,3",
+      "oz_vol": 0.592
+    },
+    "Dental_40": {
+      "status": "ok",
+      "oz_dims": "13×6,5×4,8",
+      "oz_vol": 0.406
+    },
+    "Crio_L25(new)": {
+      "status": "low",
+      "oz_dims": "22×18,5×18",
+      "oz_vol": 7.326
+    },
+    "Dental_100": {
+      "status": "ok",
+      "oz_dims": "13,7×11×6",
+      "oz_vol": 0.904
+    },
+    "Irrigator_500": {
+      "status": "low",
+      "oz_dims": "24,5×7×6,5",
+      "oz_vol": 1.115
+    },
+    "spraydlyapolostyrta": {
+      "status": "low",
+      "oz_dims": "3,7×4×13",
+      "oz_vol": 0.192
+    },
+    "Irrigator_1000": {
+      "status": "low",
+      "oz_dims": "26×8,5×8,5",
+      "oz_vol": 1.879
+    },
+    "CrioGel_5": {
+      "status": "low",
+      "oz_dims": "26×19,5×14,5",
+      "oz_vol": 7.351
+    },
+    "Dental_100_banan": {
+      "status": "ok",
+      "oz_dims": "11×13,7×6",
+      "oz_vol": 0.904
+    },
+    "Dental_100_zemlyanika": {
+      "status": "ok",
+      "oz_dims": "11×13,7×6",
+      "oz_vol": 0.904
+    },
+    "Dental_40_zemlyanika": {
+      "status": "ok",
+      "oz_dims": "13×6,5×4,8",
+      "oz_vol": 0.406
+    },
+    "Dental_20_zemlyanika": {
+      "status": "ok",
+      "oz_dims": "13×6,5×2,5",
+      "oz_vol": 0.211
+    },
+    "Dental_40_natural": {
+      "status": "ok",
+      "oz_dims": "13×6,5×4,8",
+      "oz_vol": 0.406
+    },
+    "Zub_pasta_det": {
+      "status": "ok",
+      "oz_dims": "12×4×4",
+      "oz_vol": 0.192
+    },
+    "Oral_cherry": {
+      "status": "low",
+      "oz_dims": "3,7×4×13",
+      "oz_vol": 0.192
+    },
+    "makeup_30": {
+      "status": "ok",
+      "oz_dims": "13,8×11,2×6",
+      "oz_vol": 0.927
+    }
+  }
+}
