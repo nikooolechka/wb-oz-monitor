@@ -2,7 +2,7 @@ name: Монитор габаритов Ozon (карточки vs эталон �
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # ежедневно, 12:00 МСК
+    - cron: "0 6 * * *"   # ежедневно, 9:00 МСК
   workflow_dispatch:
 
 permissions:
