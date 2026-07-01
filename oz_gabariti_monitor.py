@@ -1,63 +1,130 @@
-"""Монитор габаритов КАРТОЧЕК Ozon → канал «АС Фарм изменения».
+"""Монитор габаритов Ozon: сверка карточек с ЭТАЛОНОМ матрицы → канал изменений.
 
 Ozon на приёмке сам перемеряет ОВХ и переписывает габариты В КАРТОЧКУ
-(подтверждено справкой Ozon: новые значения вносятся в карточку, править их
-в ЛК уже нельзя). Значит изменение габаритов/объёма в карточке = Ozon
-перемерил. Ежедневно тянем Д/Ш/В из Ozon Seller API, считаем объём (л),
-сравниваем со снимком (data/oz_gabariti_state.json).
+(подтверждено справкой Ozon). Эталон = габариты из товарной матрицы
+(вкладка МАТРИЦА, столбец «габариты товара»). Ежедневно тянем габариты из
+Ozon Seller API, считаем объём (л) и сравниваем с эталоном матрицы.
 
-Изменилось:
-  объём ВЫРОС  → Ozon завысил → переплата по логистике → оспаривать 🍿
-  объём УПАЛ   → пересчитал в меньшую (нам в плюс), но могут перемерить снова 🤲
-  вернулось к базе → ✌️
-Первый запуск только фиксирует базу, без сообщений.
+Классификация (вариант C — любое отклонение сверх допуска MIN_DELTA_L):
+  карточка > эталона → Ozon ЗАВЫСИЛ → переплата логистики → оспаривать 🍿
+  карточка < эталона → занижено → нам свезло 🤲 (+ риск платы за занижение ОВХ)
+  вернулось к эталону → ✌️
 
-Секреты: OZON_CLIENT_ID, OZON_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-STATE_PATH (по умолч. data/oz_gabariti_state.json), MIN_DELTA_L (шум, 0.05).
+Первый прогон — ТИХИЙ: фиксирует базу (в канал ничего), печатает картину в лог.
+
+Секреты: OZON_CLIENT_ID, OZON_API_KEY, GSHEETS_SA_JSON,
+TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
+STATE_PATH (data/oz_gabariti_state.json), MIN_DELTA_L (0.05).
 """
 from __future__ import annotations
 
 import os
+import re
 import json
 import tempfile
 
 import requests
+import gspread
+from google.oauth2.service_account import Credentials
 
 import notify
 
 STATE_PATH = os.environ.get("STATE_PATH", "data/oz_gabariti_state.json")
+MIN_DELTA_L = float(os.environ.get("MIN_DELTA_L", "0.05"))
 CLIENT_ID = os.environ["OZON_CLIENT_ID"].strip()
 API_KEY = os.environ["OZON_API_KEY"].strip()
 BASE = "https://api-seller.ozon.ru"
 HEAD = {"Client-Id": CLIENT_ID, "Api-Key": API_KEY, "Content-Type": "application/json"}
-# ниже этого расхождения (л) считаем округлением стороны и НЕ трубим
-MIN_DELTA_L = float(os.environ.get("MIN_DELTA_L", "0.05"))
+
+OP_SHEET = "1sHlFGSVB-7V8V4q6kvcTR1rrw19EaabIaOgrCHU0DHE"
+MATRIX_TAB = "МАТРИЦА"
+PLATFORM = {"OZON", "OZ", "OZON ", "WB", "ЯМ", "ДМ", "ВБ"}
+# Ozon offer_id -> артикул в матрице (когда названия разошлись)
+ALIAS = {"spraydlyapolostyrta": "OralLubrikant"}
+
+# Плата Ozon за обработку ОВХ при занижении (с 15.09.2025), по разнице объёма (л)
+OVH_TIERS = [(0.6, 0), (1, 150), (2, 300), (3, 600), (5, 900), (10, 1200), (float("inf"), 1500)]
 
 
-def _post(path, body):
-    r = requests.post(BASE + path, headers=HEAD, json=body, timeout=60)
-    r.raise_for_status()
-    return r.json()
+def ovh_fee(gap_l: float) -> int:
+    for hi, fee in OVH_TIERS:
+        if gap_l <= hi:
+            return fee
+    return 1500
 
 
+# ---------- эталон из матрицы ----------
+def _sheets():
+    info = json.loads(os.environ["GSHEETS_SA_JSON"])
+    creds = Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+    return gspread.authorize(creds)
+
+
+def _nums(seg: str):
+    return [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[.,]\d+)?", seg)]
+
+
+def parse_etalon(v: str):
+    """Из ячейки «габариты товара» -> (объём л, 'ДхШхВ'). Для комбинированных
+    'ВБ 5х5х14  ОЗ 4х4х12' берём ОЗ-часть."""
+    if not v:
+        return None
+    seg = v
+    if "ОЗ" in v:
+        seg = v.split("ОЗ", 1)[1]
+    n = _nums(seg)
+    if len(n) < 3:
+        return None
+    a, b, c = n[0], n[1], n[2]
+    vol = round(a * b * c / 1000.0, 3)   # см³ -> л
+    dims = "х".join(str(x).rstrip("0").rstrip(".").replace(".", ",") if x % 1 else str(int(x))
+                    for x in (a, b, c))
+    return vol, dims
+
+
+def load_etalon():
+    ws = _sheets().open_by_key(OP_SHEET).worksheet(MATRIX_TAB)
+    C = ws.col_values(3)    # артикул
+    V = ws.col_values(22)   # габариты товара
+    et = {}
+    for i, cell in enumerate(C):
+        cell = (cell or "").strip()
+        if not cell or cell == "артикул":
+            continue
+        vv = V[i] if i < len(V) else ""
+        parsed = parse_etalon(vv)
+        if not parsed:
+            continue
+        for tok in re.split(r"[\s\n]+", cell):
+            tok = tok.strip()
+            if tok and tok.upper() not in PLATFORM:
+                et.setdefault(tok, parsed)
+    return et
+
+
+# ---------- карточки Ozon ----------
 def fetch_cards():
-    """offer_id -> {'dims': 'ДxШxВ' (мм), 'vol': литры}. Только видимые карточки."""
     out, last = {}, ""
     while True:
-        d = _post("/v4/product/info/attributes",
-                  {"filter": {"visibility": "VISIBLE"}, "limit": 100, "last_id": last})
+        r = requests.post(BASE + "/v4/product/info/attributes", headers=HEAD,
+                          json={"filter": {"visibility": "VISIBLE"}, "limit": 100, "last_id": last},
+                          timeout=60)
+        r.raise_for_status()
+        d = r.json()
         items = d.get("result") or []
         for it in items:
             off = (it.get("offer_id") or "").strip()
             dp, w, h = it.get("depth"), it.get("width"), it.get("height")
             if off and dp and w and h:
-                out[off] = {"dims": f"{dp}x{w}x{h}", "vol": round(dp * w * h / 1_000_000, 3)}
+                out[off] = {"mm": (dp, w, h), "vol": round(dp * w * h / 1_000_000, 3)}
         last = d.get("last_id", "")
         if not last or len(items) < 100:
             break
     return out
 
 
+# ---------- утилиты ----------
 def _load():
     try:
         with open(STATE_PATH, encoding="utf-8") as f:
@@ -79,68 +146,96 @@ def _save(state):
             os.remove(tmp)
 
 
-def _esc(s):
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _l(v):
     return f"{v:.3f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
-def msg_up(art, old, new):
-    return (f"🍿 <b>Пупупу — OZON поменял после обмера габариты {_esc(art)}</b>\n"
-            f"с {old['dims']} мм ({_l(old['vol'])} л) на {new['dims']} мм ({_l(new['vol'])} л).\n"
-            f"Объём вырос — надо запускать оспаривание 🍿")
+def _cm(mm):
+    v = mm / 10.0
+    return (str(int(v)) if v % 1 == 0 else f"{v:.2f}".rstrip("0").rstrip(".")).replace(".", ",")
 
 
-def msg_down(art, old, new):
-    return (f"🤲 <b>OZON поменял после обмера габариты {_esc(art)}</b>\n"
-            f"с {old['dims']} мм ({_l(old['vol'])} л) на {new['dims']} мм ({_l(new['vol'])} л).\n"
-            f"Нам повезло, пересчитал в меньшую сторону — но потом могут померить повторно, всё в ваших руках 🤲")
+def _dims_cm(mm3):
+    return "×".join(_cm(x) for x in mm3)
 
 
-def msg_revert(art, ref):
-    return (f"✌️ <b>OZON вернул габариты {_esc(art)}</b> к прежним "
-            f"{ref['dims']} мм ({_l(ref['vol'])} л) — всё как надо.")
+def _esc(s):
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def msg_high(art, et_dims, et_l, oz_dims, oz_l):
+    return (f"🍿 Пупупу — OZON поменял габариты: {_esc(art)}\n"
+            f"эталон из матрицы {et_dims} = {et_l} л → на {oz_dims} = {oz_l} л.\n"
+            f"Логистику считают по завышенному объёму — надо оспаривать")
+
+
+def msg_low(art, et_dims, et_l, oz_dims, oz_l, fee):
+    fee_txt = f"начислит плату за занижение ~{fee} ₽ и " if fee else ""
+    return (f"🤲 OZON поменял габариты в меньшую сторону по {_esc(art)}\n"
+            f"эталон из матрицы {et_dims} = {et_l} л → на Ozon {oz_dims} = {oz_l} л.\n"
+            f"Пока платим по заниженному — нам свезло. Но если Ozon перемерит до реального, "
+            f"{fee_txt}поднимет логистику. Всё в наших руках)")
+
+
+def msg_revert(art, old_dims, old_l, et_dims, et_l):
+    return (f"✌️ OZON вернул габариты {_esc(art)} к эталонным в нашей матрице — "
+            f"с {old_dims} ({old_l} л) на {et_dims} ({et_l} л). Всё как надо.")
+
+
+def classify(oz_vol, et_vol):
+    d = oz_vol - et_vol
+    if d > MIN_DELTA_L:
+        return "high"
+    if d < -MIN_DELTA_L:
+        return "low"
+    return "ok"
 
 
 def run_once():
     state = _load()
     first = not state
+    et = load_etalon()
     cards = fetch_cards()
 
-    if first:
-        _save({"dims": {k: {"ref": v, "last": v} for k, v in cards.items()}})
-        print(f"[OK] baseline: {len(cards)} карточек, без уведомлений", flush=True)
-        return
-
-    dims_state = state.get("dims", {})
+    recs = state.get("skus", {})
     notified = 0
-    for off, cur in cards.items():
-        rec = dims_state.get(off)
-        if rec is None:
-            dims_state[off] = {"ref": cur, "last": cur}   # новая карточка — тихо в базу
+    for off, card in cards.items():
+        key = ALIAS.get(off, off)
+        e = et.get(key) or et.get(off)
+        if not e:
             continue
-        ref, last = rec.get("ref"), rec.get("last")
-        if not last or cur["dims"] == last.get("dims"):
+        et_vol, et_dims = e
+        oz_dims = _dims_cm(card["mm"])
+        oz_vol = card["vol"]
+        status = classify(oz_vol, et_vol)
+        prev = recs.get(off, {})
+
+        if first:
+            recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
+            print(f"[BASE] {off}: {status} (эталон {et_dims}={_l(et_vol)} / Ozon {oz_dims}={_l(oz_vol)})", flush=True)
             continue
-        if abs(cur["vol"] - last.get("vol", cur["vol"])) < MIN_DELTA_L:
-            rec["last"] = cur   # мелочь (округление стороны) — молча подвинем базу
+
+        # шлём только когда карточка реально изменилась и это новый статус/значение
+        if oz_dims == prev.get("oz_dims"):
             continue
-        if ref and cur["dims"] == ref.get("dims"):
-            notify.send(msg_revert(off, ref))
-            print(f"[ALERT] {off}: вернулись к {ref['dims']}", flush=True)
-        elif cur["vol"] > last.get("vol", 0):
-            notify.send(msg_up(off, last, cur))
-            print(f"[ALERT] {off}: {last['dims']} -> {cur['dims']} (вверх)", flush=True)
+        if status == "high":
+            notify.send(msg_high(off, et_dims, _l(et_vol), oz_dims, _l(oz_vol)))
+        elif status == "low":
+            notify.send(msg_low(off, et_dims, _l(et_vol), oz_dims, _l(oz_vol), ovh_fee(et_vol - oz_vol)))
+        elif prev.get("status") in ("high", "low"):
+            notify.send(msg_revert(off, prev.get("oz_dims"), _l(prev.get("oz_vol", oz_vol)), et_dims, _l(et_vol)))
         else:
-            notify.send(msg_down(off, last, cur))
-            print(f"[ALERT] {off}: {last['dims']} -> {cur['dims']} (вниз)", flush=True)
-        rec["last"] = cur
+            recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
+            continue
+        print(f"[ALERT] {off}: {prev.get('oz_dims')} -> {oz_dims} ({status})", flush=True)
+        recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
         notified += 1
 
-    _save({"dims": dims_state})
-    print(f"[OK] отправлено в канал: {notified}", flush=True)
+    _save({"skus": recs})
+    if first:
+        print(f"[OK] базовый снимок: {len(recs)} товаров (в канал ничего)", flush=True)
+    else:
+        print(f"[OK] отправлено в канал: {notified}", flush=True)
 
 
 if __name__ == "__main__":

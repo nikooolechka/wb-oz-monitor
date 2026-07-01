@@ -1,4 +1,4 @@
-name: Монитор габаритов Ozon (карточки → канал изменений)
+name: Монитор габаритов Ozon (карточки vs эталон матрицы → канал)
 
 on:
   schedule:
@@ -26,9 +26,11 @@ jobs:
         env:
           OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
           OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_PATH: data/oz_gabariti_state.json
+          MIN_DELTA_L: "0.05"
         run: python oz_gabariti_monitor.py
       - name: Сохранить снимок обратно
         run: |
@@ -39,5 +41,5 @@ jobs:
             git commit -m "oz gabariti state update [skip ci]"
             git push
           else
-            echo "Снимок не изменился — коммит не нужен."
+            echo "Снимок не изменился."
           fi
