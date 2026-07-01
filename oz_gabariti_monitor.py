@@ -164,47 +164,59 @@ def _esc(s):
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def msg_high(art, et_dims, et_l, oz_dims, oz_l):
-    return (f"🍿 Пупупу — OZON поменял габариты: {_esc(art)}\n"
-            f"эталон из матрицы {et_dims} = {et_l} л → на {oz_dims} = {oz_l} л.\n"
-            f"Логистику считают по завышенному объёму — надо оспаривать")
+def build_digest(items):
+    """Одно сообщение на прогон по ВСЕМ изменившимся артикулам."""
+    highs = [i for i in items if i["status"] == "high"]
+    lows = [i for i in items if i["status"] == "low"]
+    revs = [i for i in items if i["status"] == "revert"]
+    p = []
+    if highs:
+        p.append("🍿 <b>Пупупу — OZON завысил габариты, надо оспаривать:</b>")
+        for i in highs:
+            p.append(f"• {_esc(i['off'])}: эталон {i['et_dims']} = {_l(i['et_vol'])} л "
+                     f"→ на Ozon {i['oz_dims']} = {_l(i['oz_vol'])} л")
+        p.append("Логистику считают по завышенному объёму.")
+        p.append("")
+    if lows:
+        p.append("🤲 <b>OZON поменял габариты в меньшую сторону — нам свезло:</b>")
+        for i in lows:
+            line = (f"• {_esc(i['off'])}: эталон {i['et_dims']} = {_l(i['et_vol'])} л "
+                    f"→ на Ozon {i['oz_dims']} = {_l(i['oz_vol'])} л")
+            if i.get("fee"):
+                line += f" — риск штрафа за занижение ~{i['fee']} ₽"
+            p.append(line)
+        p.append("Пока платим по заниженному — свезло. Но если Ozon перемерит до "
+                 "реального — начислит плату за занижение и поднимет логистику. Всё в наших руках)")
+        p.append("")
+    if revs:
+        p.append("✌️ <b>OZON вернул габариты к эталону в нашей матрице:</b>")
+        for i in revs:
+            p.append(f"• {_esc(i['off'])}: {i['oz_dims']} = {_l(i['oz_vol'])} л")
+    return "\n".join(p).strip()
 
 
-def msg_low(art, et_dims, et_l, oz_dims, oz_l, fee):
-    fee_txt = f"начислит плату за занижение ~{fee} ₽ и " if fee else ""
-    return (f"🤲 OZON поменял габариты в меньшую сторону по {_esc(art)}\n"
-            f"эталон из матрицы {et_dims} = {et_l} л → на Ozon {oz_dims} = {oz_l} л.\n"
-            f"Пока платим по заниженному — нам свезло. Но если Ozon перемерит до реального, "
-            f"{fee_txt}поднимет логистику. Всё в наших руках)")
+def _collect(cards, et):
+    out = []
+    for off, card in cards.items():
+        e = et.get(ALIAS.get(off, off)) or et.get(off)
+        if not e:
+            continue
+        et_vol, et_dims = e
+        st = classify(card["vol"], et_vol)
+        out.append({"off": off, "status": st, "et_dims": et_dims, "et_vol": et_vol,
+                    "oz_dims": _dims_cm(card["mm"]), "oz_vol": card["vol"],
+                    "fee": ovh_fee(et_vol - card["vol"]) if (et_vol - card["vol"]) > 0 else 0})
+    return out
 
 
-def msg_revert(art, old_dims, old_l, et_dims, et_l):
-    return (f"✌️ OZON вернул габариты {_esc(art)} к эталонным в нашей матрице — "
-            f"с {old_dims} ({old_l} л) на {et_dims} ({et_l} л). Всё как надо.")
-
-
-def _liter(v):
-    # Логистика Ozon округляет объём вверх до ЦЕЛОГО литра (проверено по
-    # реальным списаниям: объём внутри одного литра — та же цена; заметные
-    # ступени по целым литрам, крупные скачки на 7 и 15 л).
-    return math.ceil(round(v, 6))
-
-
-def classify(oz_vol, et_vol):
-    """ДВА сигнала:
-      (1) логистика — сменился ли ЦЕЛЫЙ литр (тариф реально другой);
-      (2) штраф ОВХ — карточка ниже эталона на ≥0,6 л (первая ступень платы за занижение).
-    Тревога, если сработал любой. Направление: карточка выше литра эталона →
-    'high' (логистика дороже, оспаривать); карточка ниже по литру ИЛИ есть риск
-    штрафа → 'low' (занижено: свезло по логистике и/или риск платы)."""
-    cl, el = _liter(oz_vol), _liter(et_vol)
-    gap = et_vol - oz_vol
-    fee = ovh_fee(gap) if gap > 0 else 0
-    if cl > el:
-        return "high"
-    if cl < el or fee > 0:
-        return "low"
-    return "ok"
+def send_current():
+    """Разовая отправка ТЕКУЩИХ несоответствий одним сообщением (по запросу)."""
+    items = [i for i in _collect(fetch_cards(), load_etalon()) if i["status"] in ("high", "low")]
+    if items:
+        notify.send(build_digest(items))
+        print(f"[SEND_NOW] отправлено артикулов: {len(items)}", flush=True)
+    else:
+        print("[SEND_NOW] текущих несоответствий нет", flush=True)
 
 
 def run_once():
@@ -212,47 +224,40 @@ def run_once():
     first = not state
     et = load_etalon()
     cards = fetch_cards()
-
     recs = state.get("skus", {})
-    notified = 0
-    for off, card in cards.items():
-        key = ALIAS.get(off, off)
-        e = et.get(key) or et.get(off)
-        if not e:
-            continue
-        et_vol, et_dims = e
-        oz_dims = _dims_cm(card["mm"])
-        oz_vol = card["vol"]
-        status = classify(oz_vol, et_vol)
+    changed = []
+    for it in _collect(cards, et):
+        off, status = it["off"], it["status"]
         prev = recs.get(off, {})
-
         if first:
-            recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
-            print(f"[BASE] {off}: {status} (эталон {et_dims}={_l(et_vol)} / Ozon {oz_dims}={_l(oz_vol)})", flush=True)
+            recs[off] = {"status": status, "oz_dims": it["oz_dims"], "oz_vol": it["oz_vol"]}
+            print(f"[BASE] {off}: {status} (эталон {it['et_dims']}={_l(it['et_vol'])} / Ozon {it['oz_dims']}={_l(it['oz_vol'])})", flush=True)
             continue
+        if it["oz_dims"] == prev.get("oz_dims"):
+            continue  # карточка не менялась
+        eff = status
+        if status == "ok":
+            if prev.get("status") in ("high", "low"):
+                eff = "revert"
+            else:
+                recs[off] = {"status": status, "oz_dims": it["oz_dims"], "oz_vol": it["oz_vol"]}
+                continue
+        it2 = dict(it); it2["status"] = eff
+        changed.append(it2)
+        recs[off] = {"status": status, "oz_dims": it["oz_dims"], "oz_vol": it["oz_vol"]}
+        print(f"[ALERT] {off}: {prev.get('oz_dims')} -> {it['oz_dims']} ({eff})", flush=True)
 
-        # шлём только когда карточка реально изменилась и это новый статус/значение
-        if oz_dims == prev.get("oz_dims"):
-            continue
-        if status == "high":
-            notify.send(msg_high(off, et_dims, _l(et_vol), oz_dims, _l(oz_vol)))
-        elif status == "low":
-            notify.send(msg_low(off, et_dims, _l(et_vol), oz_dims, _l(oz_vol), ovh_fee(et_vol - oz_vol)))
-        elif prev.get("status") in ("high", "low"):
-            notify.send(msg_revert(off, prev.get("oz_dims"), _l(prev.get("oz_vol", oz_vol)), et_dims, _l(et_vol)))
-        else:
-            recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
-            continue
-        print(f"[ALERT] {off}: {prev.get('oz_dims')} -> {oz_dims} ({status})", flush=True)
-        recs[off] = {"status": status, "oz_dims": oz_dims, "oz_vol": oz_vol}
-        notified += 1
-
+    if not first and changed:
+        notify.send(build_digest(changed))
     _save({"skus": recs})
     if first:
         print(f"[OK] базовый снимок: {len(recs)} товаров (в канал ничего)", flush=True)
     else:
-        print(f"[OK] отправлено в канал: {notified}", flush=True)
+        print(f"[OK] изменений: {len(changed)}; сообщение {'отправлено' if changed else 'не требуется'}", flush=True)
 
 
 if __name__ == "__main__":
-    run_once()
+    if os.environ.get("SEND_NOW"):
+        send_current()
+    else:
+        run_once()
