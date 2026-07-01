@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import re
+import math
 import json
 import tempfile
 
@@ -182,13 +183,22 @@ def msg_revert(art, old_dims, old_l, et_dims, et_l):
             f"с {old_dims} ({old_l} л) на {et_dims} ({et_l} л). Всё как надо.")
 
 
+def _billing(v):
+    # Ozon считает логистику по объёму, округлённому ВВЕРХ до 0,1 л
+    # (виден в юнитке как «Объём товара (л)»: 0,92→1,0; 1,41→1,5; 16,17→16,2).
+    return math.ceil(round(v * 10, 6)) / 10.0
+
+
 def classify(oz_vol, et_vol):
-    d = oz_vol - et_vol
-    if d > MIN_DELTA_L:
+    """Сравниваем ТАРИФНУЮ СТУПЕНЬ, а не сырой объём: тревожим только когда
+    округлённый до 0,1 л объём попал в другую ступень (логистика реально
+    подорожала/подешевела). Разница внутри одной ступени — молчим."""
+    bc, be = _billing(oz_vol), _billing(et_vol)
+    if bc > be:      # ступень выше — логистика ДОРОЖЕ
         return "high"
-    if d < -MIN_DELTA_L:
+    if bc < be:      # ступень ниже — логистика дешевле
         return "low"
-    return "ok"
+    return "ok"      # та же ступень — изменения цены нет
 
 
 def run_once():
