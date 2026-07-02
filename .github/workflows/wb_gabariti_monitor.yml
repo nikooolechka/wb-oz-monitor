@@ -14,6 +14,9 @@ on:
       wb_to:
         description: "период до (YYYY-MM-DD)"
         default: ""
+      send_current:
+        description: "1 = разово отправить текущие несоответствия"
+        default: ""
 
 permissions:
   contents: write
@@ -41,6 +44,7 @@ jobs:
           DRY: ${{ github.event.inputs.dry }}
           WB_FROM: ${{ github.event.inputs.wb_from || '2026-06-23' }}
           WB_TO: ${{ github.event.inputs.wb_to || '2026-06-30' }}
+          SEND_CURRENT: ${{ github.event.inputs.send_current }}
         run: python wb_gabariti_monitor.py
       - name: Сохранить кэш отчётов обратно
         run: |

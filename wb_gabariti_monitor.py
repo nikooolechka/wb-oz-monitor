@@ -195,8 +195,43 @@ def run(dfrom, dto):
         print("[WB] изменений нет", flush=True)
 
 
+# Разовая фиксация текущих несоответствий (обмер WB из калибровочного прогона
+# 2026-06-30). Эталон берём ЖИВЬЁМ из матрицы, объём WB — из уже полученных данных
+# (без запроса к WB API, чтобы не ловить лимит).
+WB_MEASURED_SNAPSHOT = {
+    "CrioGel1l": 2.121, "Dental_40_natural": 0.599, "Dental20": 0.294,
+    "Dental_100_banan": 1.063, "Crio_L25(new)": 8.303,
+    "Dental_100_zemlyanika": 1.008, "OptikaSpray_new": 0.756,
+}
+
+
+def send_current():
+    et = load_etalon()
+    items = []
+    for art, wv in WB_MEASURED_SNAPSHOT.items():
+        e = et.get(art)
+        if not e:
+            print(f"[SEND_CURRENT] нет эталона для {art}", flush=True)
+            continue
+        ev = e[0]
+        pct = round((wv - ev) / ev * 100) if ev else 0
+        items.append((art, ev, wv, pct))
+    items.sort(key=lambda x: -x[3])
+    lines = ["🍿WB считает объём БОЛЬШЕ реального из матрицы — переплата за "
+             "хранение и логистику. Взяли на контроль, готовим оспаривание:"]
+    for art, ev, wv, pct in items:
+        lines.append(f"• {art}: эталон {_l(ev)} л → WB считает {_l(wv)} л (+{pct}%)")
+    lines.append("При расхождении >10% WB применяет повышающий коэффициент "
+                 "×5/×10 к логистике и хранению.")
+    notify.send("\n".join(lines))
+    print(f"[SEND_CURRENT] отправлено артикулов: {len(items)}", flush=True)
+
+
 if __name__ == "__main__":
     import sys
     a = [x for x in sys.argv[1:] if not x.startswith("--")]
-    df, dt = (a + [os.environ.get("WB_FROM", "2026-06-23"), os.environ.get("WB_TO", "2026-06-30")])[:2]
-    run(df, dt)
+    if os.environ.get("SEND_CURRENT"):
+        send_current()
+    else:
+        df, dt = (a + [os.environ.get("WB_FROM", "2026-06-23"), os.environ.get("WB_TO", "2026-06-30")])[:2]
+        run(df, dt)
