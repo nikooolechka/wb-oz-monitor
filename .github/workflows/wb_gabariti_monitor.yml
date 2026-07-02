@@ -1,0 +1,55 @@
+name: Монитор габаритов WB (еженедельно → канал изменений)
+
+on:
+  schedule:
+    - cron: "0 7 * * 2"   # вторник 10:00 МСК (после понедельничного отчёта WB)
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = калибровочный прогон (только лог, без канала)"
+        default: ""
+      wb_from:
+        description: "период от (YYYY-MM-DD)"
+        default: ""
+      wb_to:
+        description: "период до (YYYY-MM-DD)"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wb-gabariti
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Прогон WB-монитора габаритов
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ github.event.inputs.dry }}
+          WB_FROM: ${{ github.event.inputs.wb_from || '2026-06-23' }}
+          WB_TO: ${{ github.event.inputs.wb_to || '2026-06-30' }}
+        run: python wb_gabariti_monitor.py
+      - name: Сохранить кэш отчётов обратно
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/wb/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "wb realization cache [skip ci]"
+            git push
+          else
+            echo "кэш не изменился"
+          fi
