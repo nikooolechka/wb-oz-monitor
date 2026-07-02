@@ -1,16 +1,11 @@
 """Монитор габаритов WB (еженедельно) → канал «АС Фарм изменения».
 
-WB карточку НЕ переписывает: свой обмер он кладёт в отчёты и применяет
-штраф/коэффициент. Два сигнала:
-  A) Удержания (reportDetailByPeriod, через wb_finance): строки штрафов/логистики,
-     связанные с габаритами (по bonus_type_name + аномальная логистика).
-  B) Платное хранение (paid_storage): ИЗМЕРЕННЫЙ WB объём (л) по nmId — сравниваем
-     с эталоном матрицы. Флагуем по факту удорожания, а не по абстрактному %:
-       - ступень: WB тарифицирует объём с точностью 0,1 л; если округлённый
-         WB-объём попал в более высокую 0,1-л ступень, чем эталон, — логистика
-         и хранение уже считаются дороже;
-       - коэффициент: расхождение >10% → WB включает повышающий ×5/×10.
-     Срабатывает любой из двух.
+WB карточку НЕ переписывает: свой обмер он кладёт в отчёты. Сигнал —
+платное хранение (paid_storage): ИЗМЕРЕННЫЙ WB объём (л) по nmId сравниваем
+с эталоном матрицы. Флагуем по факту удорожания/удешевления, не по абстрактному %:
+  - ступень: WB тарифицирует объём с точностью 0,1 л; выше эталонной 0,1-л
+    ступени — дороже (🍿), ниже — пока платим меньше (🤲);
+  - коэффициент: расхождение >10% в любую сторону → WB включает ×5/×10.
 
 Тексты — один дайджест на прогон (как на Ozon). DRY=1 → только лог, в канал НЕ шлём.
 
@@ -30,17 +25,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 import notify
-import wb_finance as wf
 
 OP_SHEET = "1sHlFGSVB-7V8V4q6kvcTR1rrw19EaabIaOgrCHU0DHE"
 MATRIX_TAB = "МАТРИЦА"
 PLATFORM = {"OZON", "OZ", "WB", "ЯМ", "ДМ", "ВБ"}
 ANALYTICS = "https://seller-analytics-api.wildberries.ru"
 DRY = os.environ.get("DRY") == "1"
-# ключевые слова для строк удержаний, связанных с габаритами/обмером
-GAB_KW = ("габарит", "овх", "характеристик", "объ", "коэффициент", "логист", "хранени")
-
-OVH = ()  # (у WB штраф свой — см. отчёт; калибруем по факту)
 
 
 def _ctx():
@@ -143,10 +133,14 @@ def _step(v):
     return round(float(v) + 1e-9, 1)
 
 
-def _is_high(ev, wv, pct):
-    """Флаг, если реально дороже: WB попал в более высокую 0,1-л ступень
-    ЛИБО расхождение достигло штрафного коэффициента (>10%)."""
-    return _step(wv) > _step(ev) or pct >= WB_PEN_PCT
+def _classify(ev, wv, pct):
+    """high — WB объём в более высокой 0,1-л ступени или расхождение >10% (дороже);
+    low — в более низкой ступени или < -10% (пока платим меньше); иначе ok."""
+    if _step(wv) > _step(ev) or pct >= WB_PEN_PCT:
+        return "high"
+    if _step(wv) < _step(ev) or pct <= -WB_PEN_PCT:
+        return "low"
+    return "ok"
 
 
 def _load_state():
@@ -177,22 +171,8 @@ def run(dfrom=None, dto=None):
     recs = state.get("skus", {})
     print(f"[WB] период {dfrom}..{dto}, эталон {len(et)}, база {'нет (тихо)' if first_b else 'есть'}", flush=True)
 
-    # --- A) штрафы, связанные с габаритами (из реализации) ---
-    gab_pen = {}
-    try:
-        rows = wf.fetch_realization(dfrom, dto)
-        print(f"[WB] реализация: {len(rows)} строк", flush=True)
-        for r in rows:
-            pen = float(r.get("penalty") or 0)
-            reason = (r.get("bonus_type_name") or "").strip()
-            if pen and any(k in reason.lower() for k in GAB_KW):
-                art = (r.get("sa_name") or r.get("supplierArticle") or "").strip()
-                gab_pen[art] = gab_pen.get(art, 0) + pen
-    except Exception as e:
-        print(f"[WB] реализация недоступна: {e}", flush=True)
-
-    # --- B) объём хранения vs эталон (детект изменений) ---
-    b_high, b_revert = [], []
+    # --- объём хранения vs эталон (детект изменений в обе стороны) ---
+    b_high, b_low, b_revert = [], [], []
     try:
         storage = fetch_paid_storage(dfrom, dto)
     except Exception as e:
@@ -204,14 +184,17 @@ def run(dfrom=None, dto=None):
             continue
         ev, wv = e[0], info["vol"]
         pct = round((wv - ev) / ev * 100) if ev else 0
-        status = "high" if _is_high(ev, wv, pct) else "ok"
+        status = _classify(ev, wv, pct)
         prev = recs.get(vc, {})
         if first_b:
             recs[vc] = {"status": status, "wb_vol": wv, "pct": pct}
             continue
-        if status == "high" and (prev.get("status") != "high" or abs(wv - float(prev.get("wb_vol") or 0)) >= 0.05):
+        changed = prev.get("status") != status or abs(wv - float(prev.get("wb_vol") or 0)) >= 0.05
+        if status == "high" and changed:
             b_high.append((vc, ev, wv, pct))
-        elif status == "ok" and prev.get("status") == "high":
+        elif status == "low" and changed:
+            b_low.append((vc, ev, wv, pct))
+        elif status == "ok" and prev.get("status") in ("high", "low"):
             b_revert.append((vc, ev, wv))
         recs[vc] = {"status": status, "wb_vol": wv, "pct": pct}
 
@@ -221,17 +204,17 @@ def run(dfrom=None, dto=None):
 
     # --- дайджест (первая строка блока — жирная) ---
     parts = []
-    if gab_pen:
-        parts.append("⚠️ <b>WB удержал штраф за весогабаритные характеристики (ВГХ) — "
-                     "на приёмке товар перемерили, заявленные размеры не совпали:</b>")
-        for a, p in sorted(gab_pen.items(), key=lambda x: -x[1]):
-            parts.append(f"• {a}: {p:.0f} ₽")
-        parts.append("")
     if b_high:
         parts.append("🍿 <b>WB пересчитал объёмы на бОльшие — переплата за хранение и логистику:</b>")
         for vc, ev, wv, pct in sorted(b_high, key=lambda x: -x[3]):
             parts.append(f"• {vc}: эталон {_l(ev)} л → WB считает {_l(wv)} л (+{pct}%)")
         parts.append("Необходимо направить запрос в поддержку на переобмер, когда поедет новая поставка.")
+        parts.append("")
+    if b_low:
+        parts.append("🤲 <b>WB пересчитал объёмы на меньшие — пока платим меньше:</b>")
+        for vc, ev, wv, pct in sorted(b_low, key=lambda x: x[3]):
+            parts.append(f"• {vc}: эталон {_l(ev)} л → WB считает {_l(wv)} л ({pct}%)")
+        parts.append("Свезло. При переобмере WB вернёт к реальному — тогда станет дороже.")
         parts.append("")
     if b_revert:
         parts.append("✌️ <b>WB вернул объём к эталону:</b>")
@@ -244,7 +227,7 @@ def run(dfrom=None, dto=None):
         return
     if msg:
         notify.send(msg)
-        print(f"[WB] отправлено (штрафы:{len(gab_pen)} объём↑:{len(b_high)} вернулось:{len(b_revert)})", flush=True)
+        print(f"[WB] отправлено (объём↑:{len(b_high)} объём↓:{len(b_low)} вернулось:{len(b_revert)})", flush=True)
     else:
         print("[WB] изменений нет — в канал ничего", flush=True)
 
