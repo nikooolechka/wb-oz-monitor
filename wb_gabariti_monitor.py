@@ -128,71 +128,109 @@ def _l(v):
     return f"{v:.3f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
-def run(dfrom, dto):
+import pathlib
+STATE = pathlib.Path("data/wb_gabariti_state.json")
+WB_PCT_MIN = int(os.environ.get("WB_PCT_MIN", "5"))
+
+
+def _load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_state(d):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(d, ensure_ascii=False, indent=2))
+
+
+def _default_period():
+    import datetime
+    dto = datetime.date.today() - datetime.timedelta(days=1)
+    dfrom = dto - datetime.timedelta(days=6)
+    return dfrom.isoformat(), dto.isoformat()
+
+
+def run(dfrom=None, dto=None):
+    if not dfrom or not dto:
+        dfrom, dto = _default_period()
     et = load_etalon()
-    print(f"[WB] эталон: {len(et)} артикулов", flush=True)
+    state = _load_state()
+    first_b = "skus" not in state
+    recs = state.get("skus", {})
+    print(f"[WB] период {dfrom}..{dto}, эталон {len(et)}, база {'нет (тихо)' if first_b else 'есть'}", flush=True)
 
-    # --- A) удержания/штрафы из реализации ---
-    rows = wf.fetch_realization(dfrom, dto)
-    print(f"[WB] реализация {dfrom}..{dto}: {len(rows)} строк", flush=True)
-    by_reason = {}
-    pen_by_art = {}
-    for r in rows:
-        pen = float(r.get("penalty") or 0)
-        reason = (r.get("bonus_type_name") or "").strip()
-        if pen:
-            by_reason[reason] = by_reason.get(reason, 0) + pen
-            art = (r.get("sa_name") or r.get("supplierArticle") or "").strip()
-            if any(k in reason.lower() for k in GAB_KW):
-                pen_by_art[art] = pen_by_art.get(art, 0) + pen
-    print("[WB] виды штрафов (penalty) за период:")
-    for reason, s in sorted(by_reason.items(), key=lambda x: -abs(x[1])):
-        print(f"    {s:>10.2f} ₽  {reason or '(без причины)'}", flush=True)
+    # --- A) штрафы, связанные с габаритами (из реализации) ---
+    gab_pen = {}
+    try:
+        rows = wf.fetch_realization(dfrom, dto)
+        print(f"[WB] реализация: {len(rows)} строк", flush=True)
+        for r in rows:
+            pen = float(r.get("penalty") or 0)
+            reason = (r.get("bonus_type_name") or "").strip()
+            if pen and any(k in reason.lower() for k in GAB_KW):
+                art = (r.get("sa_name") or r.get("supplierArticle") or "").strip()
+                gab_pen[art] = gab_pen.get(art, 0) + pen
+    except Exception as e:
+        print(f"[WB] реализация недоступна: {e}", flush=True)
 
-    # --- B) измеренный объём из платного хранения ---
+    # --- B) объём хранения vs эталон (детект изменений) ---
+    b_high, b_revert = [], []
     try:
         storage = fetch_paid_storage(dfrom, dto)
     except Exception as e:
         storage = {}
         print(f"[WB] paid_storage недоступен: {e}", flush=True)
-    print(f"[WB] платное хранение: {len(storage)} артикулов с объёмом", flush=True)
-    dev = []
     for vc, info in storage.items():
         e = et.get(vc)
         if not e:
             continue
-        et_vol = e[0]; wb_vol = info["vol"]
-        diff = round(wb_vol - et_vol, 3)
-        pct = (diff / et_vol * 100) if et_vol else 0
-        tag = "ok" if abs(round(wb_vol, 1) - round(et_vol, 1)) < 0.05 else ("выше" if diff > 0 else "ниже")
-        if tag != "ok":
-            dev.append((vc, et_vol, wb_vol, diff, pct))
-        print(f"    {vc:<24} эталон {_l(et_vol)} / WB измерил {_l(wb_vol)} ({diff:+.3f}, {pct:+.0f}%) [{tag}]", flush=True)
+        ev, wv = e[0], info["vol"]
+        pct = round((wv - ev) / ev * 100) if ev else 0
+        status = "high" if pct >= WB_PCT_MIN else "ok"
+        prev = recs.get(vc, {})
+        if first_b:
+            recs[vc] = {"status": status, "wb_vol": wv, "pct": pct}
+            continue
+        if status == "high" and (prev.get("status") != "high" or abs(wv - float(prev.get("wb_vol") or 0)) >= 0.05):
+            b_high.append((vc, ev, wv, pct))
+        elif status == "ok" and prev.get("status") == "high":
+            b_revert.append((vc, ev, wv))
+        recs[vc] = {"status": status, "wb_vol": wv, "pct": pct}
 
-    if DRY:
-        print("[WB][DRY] калибровочный прогон — в канал ничего не отправлено.", flush=True)
-        return
+    _save_state({"skus": recs})
+    if first_b:
+        print(f"[WB] базовый снимок объёмов ({len(recs)}) — B в канал не слал", flush=True)
 
-    # боевой режим — дайджест (форматы утвердим после калибровки)
+    # --- дайджест (первая строка блока — жирная) ---
     parts = []
-    gab_pen = {a: p for a, p in pen_by_art.items() if p}
     if gab_pen:
-        parts.append("⚠️ <b>WB: удержания, связанные с габаритами/обмером:</b>")
+        parts.append("⚠️ <b>WB начислил штрафы, связанные с габаритами/обмером:</b>")
         for a, p in sorted(gab_pen.items(), key=lambda x: -x[1]):
             parts.append(f"• {a}: {p:.0f} ₽")
         parts.append("")
-    if dev:
-        parts.append("📏 <b>WB измерил объём иначе, чем в эталоне матрицы:</b>")
-        for vc, ev, wv, diff, pct in sorted(dev, key=lambda x: -abs(x[4])):
-            line = f"• {vc}: эталон {_l(ev)} л → WB {_l(wv)} л ({pct:+.0f}%)"
-            if abs(pct) > 10:
-                line += " — риск коэффициента ×5/×10 и штрафа"
-            parts.append(line)
-    if parts:
-        notify.send("\n".join(parts).strip())
-        print(f"[WB] отправлено в канал", flush=True)
+    if b_high:
+        parts.append("🍿 <b>WB считает объём БОЛЬШЕ реального из матрицы — переплата за "
+                     "хранение и логистику. Взяли на контроль, готовим оспаривание:</b>")
+        for vc, ev, wv, pct in sorted(b_high, key=lambda x: -x[3]):
+            parts.append(f"• {vc}: эталон {_l(ev)} л → WB считает {_l(wv)} л (+{pct}%)")
+        parts.append("При расхождении >10% WB применяет повышающий коэффициент ×5/×10 к логистике и хранению.")
+        parts.append("")
+    if b_revert:
+        parts.append("✌️ <b>WB вернул объём к эталону:</b>")
+        for vc, ev, wv in b_revert:
+            parts.append(f"• {vc}: {_l(wv)} л (эталон {_l(ev)} л)")
+    msg = "\n".join(parts).strip()
+
+    if DRY:
+        print("[WB][DRY] сообщение (в канал НЕ отправлено):\n" + (msg or "(пусто)"), flush=True)
+        return
+    if msg:
+        notify.send(msg)
+        print(f"[WB] отправлено (штрафы:{len(gab_pen)} объём↑:{len(b_high)} вернулось:{len(b_revert)})", flush=True)
     else:
-        print("[WB] изменений нет", flush=True)
+        print("[WB] изменений нет — в канал ничего", flush=True)
 
 
 # Разовая фиксация текущих несоответствий (обмер WB из калибровочного прогона
@@ -233,5 +271,5 @@ if __name__ == "__main__":
     if os.environ.get("SEND_CURRENT"):
         send_current()
     else:
-        df, dt = (a + [os.environ.get("WB_FROM", "2026-06-23"), os.environ.get("WB_TO", "2026-06-30")])[:2]
-        run(df, dt)
+        run(os.environ.get("WB_FROM") or (a[0] if len(a)>0 else None),
+            os.environ.get("WB_TO") or (a[1] if len(a)>1 else None))
