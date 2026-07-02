@@ -3,7 +3,7 @@ name: Проверка оферт WB+Ozon
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 8 * * 1,4"   # Пн и Чт 11:00 МСК (оферты меняются редко; экономим кредиты Scrapfly)
+    - cron: "0 8 * * *"   # ежедневно 11:00 МСК (оферты/договор — важно, проверяем каждый день)
 
 permissions:
   contents: write
