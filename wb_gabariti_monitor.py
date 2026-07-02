@@ -233,7 +233,7 @@ def run(dfrom=None, dto=None):
         parts.append("🍿 <b>WB пересчитал объёмы на бОльшие — переплата за хранение и логистику:</b>")
         for vc, ev, wv, pct in sorted(b_high, key=lambda x: -x[3]):
             parts.append(f"• {vc}: эталон {_l(ev)} л → WB считает {_l(wv)} л (+{pct}%)")
-        parts.append("Необходимо запустить оспаривание через поддержку, когда поедет новая поставка.")
+        parts.append("Необходимо направить запрос в поддержку на переобмер, когда поедет новая поставка.")
         parts.append("")
     if b_revert:
         parts.append("✌️ <b>WB вернул объём к эталону:</b>")
@@ -276,7 +276,7 @@ def send_current():
     lines = ["🍿 <b>WB пересчитал объёмы на бОльшие — переплата за хранение и логистику:</b>"]
     for art, ev, wv, pct in items:
         lines.append(f"• {art}: эталон {_l(ev)} л → WB считает {_l(wv)} л (+{pct}%)")
-    lines.append("Необходимо запустить оспаривание через поддержку, когда поедет новая поставка.")
+    lines.append("Необходимо направить запрос в поддержку на переобмер, когда поедет новая поставка.")
     notify.send("\n".join(lines))
     print(f"[SEND_CURRENT] отправлено артикулов: {len(items)}", flush=True)
 
