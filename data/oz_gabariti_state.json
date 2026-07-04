@@ -109,6 +109,16 @@
       "status": "ok",
       "oz_dims": "13,8×11,2×6",
       "oz_vol": 0.927
+    },
+    "extract_pihta": {
+      "status": "ok",
+      "oz_dims": "13,7×6×11",
+      "oz_vol": 0.904
+    },
+    "extract_romashka": {
+      "status": "ok",
+      "oz_dims": "13,7×6×11",
+      "oz_vol": 0.904
     }
   }
 }
