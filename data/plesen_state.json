@@ -1,0 +1,8 @@
+{
+  "plesen": {
+    "seen": [],
+    "events": [],
+    "alerted": false,
+    "initialized": true
+  }
+}
