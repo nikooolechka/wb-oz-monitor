@@ -1,0 +1,46 @@
+name: Сторож автосверки календаря постера
+
+on:
+  schedule:
+    - cron: "0 14 * * *"   # ежедневно 17:00 МСК (после прогона постера 16:00 МСК)
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = только лог, без канала"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: poster-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Прогон сторожа
+        env:
+          SCRAPFLY_KEY: ${{ secrets.SCRAPFLY_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: python poster_sync_watchdog.py
+      - name: Сохранить состояние
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/poster_watchdog_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "poster watchdog state [skip ci]"
+            git push
+          else
+            echo "состояние не изменилось"
+          fi
