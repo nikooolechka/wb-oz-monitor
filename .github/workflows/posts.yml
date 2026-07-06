@@ -2,7 +2,7 @@ name: Дайджест постов каналов WB/Ozon
 
 on:
   schedule:
-    - cron: "0 4 * * *"   # 07:00 МСК — раньше, чтобы вчерашние посты не вытеснились из t.me/s/
+    - cron: "30 6 * * *"   # 09:30 МСК
   workflow_dispatch:
 
 permissions:
