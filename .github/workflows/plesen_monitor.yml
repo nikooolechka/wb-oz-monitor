@@ -1,0 +1,44 @@
+name: Монитор плесени в отзывах (WB+Ozon → канал изменений)
+
+on:
+  schedule:
+    - cron: "0 8 */5 * *"    # раз в ~5 дней (числа 1,6,11,16,21,26,31), 08:00 UTC / 11:00 МСК
+  workflow_dispatch:          # ручной запуск для теста
+
+permissions:
+  contents: write             # чтобы коммитить снимок состояния обратно
+
+concurrency:
+  group: plesen
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Прогон монитора плесени
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
+          OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATE_PATH: data/plesen_state.json
+        run: python plesen_monitor.py
+      - name: Сохранить снимок обратно в репозиторий
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/plesen_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "plesen state update [skip ci]"
+            git push
+          else
+            echo "Снимок не изменился — коммит не нужен."
+          fi
