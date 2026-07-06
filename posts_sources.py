@@ -5,6 +5,10 @@
 Парсим сырой HTML — НЕ через LLM-пересказчик (тот теряет даты, искажает текст
 и домысливает).
 
+Пагинация (?before=<id>) — до 3 страниц назад, пока не покроем вчерашние сутки.
+Это нужно для активных каналов, где к утру вчерашние посты вытеснены из
+последних ~20.
+
 Чат (группа) через t.me/s/ не читается — такие источники сюда не добавлять,
 они уходят в этап с Telethon. @viktor_gamm_mp — это чат, поэтому его тут нет.
 """
@@ -13,7 +17,7 @@ from __future__ import annotations
 import re
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from html import unescape
 
 import requests
@@ -95,9 +99,35 @@ def _parse(channel: str, page: str) -> list[Post]:
 
 
 def fetch_channel(channel: str) -> list[Post]:
-    """Все посты с превью-страницы канала. Бросает исключение при сбое сети."""
-    resp = requests.get(
-        f"https://t.me/s/{channel}", headers=HEADERS, timeout=TIMEOUT, verify=VERIFY,
-    )
-    resp.raise_for_status()
-    return _parse(channel, resp.text)
+    """Посты канала с пагинацией (?before=<id>) до 3 страниц назад.
+
+    Останавливается, как только появляется пост старше вчерашних суток МСК —
+    это гарантирует, что вчерашние посты активных каналов не теряются.
+    """
+    MSK = timezone(timedelta(hours=3))
+    yesterday = (datetime.now(MSK) - timedelta(days=1)).date()
+
+    all_posts: list[Post] = []
+    seen_ids: set[int] = set()
+    before_id: int | None = None
+
+    for _ in range(3):
+        url = f"https://t.me/s/{channel}"
+        if before_id is not None:
+            url += f"?before={before_id}"
+        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
+        resp.raise_for_status()
+        page_posts = _parse(channel, resp.text)
+        if not page_posts:
+            break
+        new_posts = [p for p in page_posts if p.post_id not in seen_ids]
+        if not new_posts:
+            break
+        seen_ids.update(p.post_id for p in new_posts)
+        all_posts.extend(new_posts)
+        oldest = min(p.dt.astimezone(MSK).date() for p in new_posts)
+        if oldest < yesterday:
+            break
+        before_id = min(p.post_id for p in new_posts)
+
+    return all_posts
