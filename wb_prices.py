@@ -419,12 +419,8 @@ def run():
             if run_label == "13:00" and HIST_ENABLED:
                 push_history_column(sh, oz_data, now, tab=OZ_HIST_TAB, subhead=OZ_SUB)
                 print(f"[prices] Ozon: столбец истории {now:%d.%m.%Y}", flush=True)
-            if OZ_PROXY and gotoz < len(oz_data) - ALLOWED_MISS:
-                _alert(f"⚠️ <b>Цены Ozon: витрина собралась только {gotoz}/{len(oz_data)}.</b>\n"
-                       f"Прогон {run_label}. Проверить прокси/composer.")
         except Exception as e:
             print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
-            _alert(f"⚠️ <b>Цены Ozon: сбой.</b>\nПрогон {run_label}. {str(e)[:200]}")
 
     if len(misses) > ALLOWED_MISS:
         _alert(f"⚠️ <b>Цены WB: собрано только {got}/{len(data)}.</b>\n"
