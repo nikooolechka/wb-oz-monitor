@@ -44,6 +44,7 @@ WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
 OZ_CID = os.environ.get("OZON_CLIENT_ID", "").strip()
 OZ_KEY = os.environ.get("OZON_API_KEY", "").strip()
 OZ_BANK_HEADER = "Цена с другими банками"   # колонка Ozon-блока Лист1, которую заполняем
+OZ_ENABLED = os.environ.get("PRICES_OZ_ENABLED", "") == "1"  # Ozon включается только после сверки
 
 # Список артикулов НЕ хардкодится — берётся из кабинета WB (vendorCode→nmID).
 # Исключаем заведомо списанные/непрофильные (не добавлять их в Лист1/историю).
@@ -356,7 +357,7 @@ def run():
     try:
         w = write_snapshot(sh, data)
         # Ozon: «цена с картами других банков» (Лист1-driven — ловит новые артикулы из колонки H)
-        if OZ_CID and OZ_KEY:
+        if OZ_CID and OZ_KEY and OZ_ENABLED:
             try:
                 oz_names = {(v or "").strip() for v in l1.col_values(8)[1:]
                             if (v or "").strip() and (v or "").strip() not in EXCLUDE
