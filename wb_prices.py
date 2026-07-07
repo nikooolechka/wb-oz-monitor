@@ -41,6 +41,9 @@ HIST_TAB = os.environ.get("PRICES_HISTORY_TAB", "история WB")
 
 MP_TOKEN = os.environ.get("MPSTATS_TOKEN", "").strip()
 WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
+OZ_CID = os.environ.get("OZON_CLIENT_ID", "").strip()
+OZ_KEY = os.environ.get("OZON_API_KEY", "").strip()
+OZ_BANK_HEADER = "Цена с другими банками"   # колонка Ozon-блока Лист1, которую заполняем
 
 # Список артикулов НЕ хардкодится — берётся из кабинета WB (vendorCode→nmID).
 # Исключаем заведомо списанные/непрофильные (не добавлять их в Лист1/историю).
@@ -98,6 +101,71 @@ def mpstats_prices(nm):
              {"X-Mpstats-TOKEN": MP_TOKEN, "Content-Type": "application/json"})
     it = (d or {}).get("item") or {}
     return it.get("final_price"), it.get("wallet_price")
+
+
+# ---------- Ozon: «цена с картами других банков» = MPStats oz final_price ----------
+def ozon_offer_to_sku(offer_ids):
+    """{offer_id: sku (витринный)} через Ozon seller API. Резолвит SKU по имени
+    артикула — новый артикул в Лист1 подхватывается сам."""
+    body = json.dumps({"offer_id": list(offer_ids), "product_id": [], "sku": []}).encode()
+    req = urllib.request.Request("https://api-seller.ozon.ru/v3/product/info/list",
+        data=body, method="POST",
+        headers={"Client-Id": OZ_CID, "Api-Key": OZ_KEY, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60, context=_ctx()) as r:
+        d = json.loads(r.read())
+    return {it.get("offer_id"): it.get("sku") for it in (d.get("items") or []) if it.get("sku")}
+
+
+def mpstats_oz_final(sku):
+    d = _get(f"https://mpstats.io/api/oz/get/item/{sku}",
+             {"X-Mpstats-TOKEN": MP_TOKEN, "Content-Type": "application/json"})
+    return ((d or {}).get("item") or {}).get("final_price")
+
+
+def oz_bank_prices(oz_names):
+    """{name: цена с картами других банков} по артикулам из Ozon-блока Лист1."""
+    if not oz_names:
+        return {}
+    sku_map = ozon_offer_to_sku(oz_names)
+    out = {}
+    for name in oz_names:
+        sku = sku_map.get(name)
+        if not sku:
+            continue
+        try:
+            fp = mpstats_oz_final(sku)
+        except Exception as e:
+            print(f"[prices] MPStats oz {name}: {e}", flush=True)
+            fp = None
+        if fp:
+            out[name] = fp
+        time.sleep(0.25)
+    return out
+
+
+def write_oz_bank(sh, oz_data):
+    """Пишет «цену с другими банками» в Ozon-блок Лист1: по имени артикула в
+    колонке H, в колонку с заголовком OZ_BANK_HEADER (ищем по шапке, не по букве)."""
+    ws = sh.worksheet(SNAP_TAB)
+    header = ws.row_values(1)
+    kcol = None
+    for i, h in enumerate(header, start=1):
+        if (h or "").strip() == OZ_BANK_HEADER:
+            kcol = i
+            break
+    if not kcol:
+        print("[prices] колонка Ozon 'с другими банками' не найдена", flush=True)
+        return 0
+    col_h = ws.col_values(8)  # колонка H — артикулы Ozon-блока
+    reqs = []
+    for row_i, name in enumerate(col_h, start=1):
+        key = (name or "").strip()
+        if key in oz_data:
+            a1 = rowcol_to_a1(row_i, kcol)
+            reqs.append({"range": f"{SNAP_TAB}!{a1}", "values": [[oz_data[key]]]})
+    if reqs:
+        ws.spreadsheet.values_batch_update({"valueInputOption": "USER_ENTERED", "data": reqs})
+    return len(reqs)
 
 
 def collect(l1_names):
@@ -287,6 +355,17 @@ def run():
 
     try:
         w = write_snapshot(sh, data)
+        # Ozon: «цена с картами других банков» (Лист1-driven — ловит новые артикулы из колонки H)
+        if OZ_CID and OZ_KEY:
+            try:
+                oz_names = {(v or "").strip() for v in l1.col_values(8)[1:]
+                            if (v or "").strip() and (v or "").strip() not in EXCLUDE
+                            and (v or "").strip() != "озон"}
+                oz_data = oz_bank_prices(oz_names)
+                kw = write_oz_bank(sh, oz_data)
+                print(f"[prices] Ozon 'с другими банками' обновлено: {kw}", flush=True)
+            except Exception as e:
+                print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
         if run_label == "13:00" and HIST_ENABLED:
             push_history_column(sh, data, now)
             print(f"[prices] снимок {w} артик.; в историю добавлен столбец {now:%d.%m.%Y}", flush=True)
