@@ -1,0 +1,104 @@
+{
+  "skus": {
+    "cryolipolysis25": {
+      "status": "ok",
+      "wb_vol": 8.303,
+      "pct": 0
+    },
+    "Irrigator_500": {
+      "status": "ok",
+      "wb_vol": 1.225,
+      "pct": 0
+    },
+    "Dental50": {
+      "status": "ok",
+      "wb_vol": 0.924,
+      "pct": 0
+    },
+    "Dental_40_natural": {
+      "status": "high",
+      "wb_vol": 0.599,
+      "pct": 27
+    },
+    "Irrigator_1000": {
+      "status": "ok",
+      "wb_vol": 2.106,
+      "pct": 0
+    },
+    "OptikaSpray_new": {
+      "status": "high",
+      "wb_vol": 0.756,
+      "pct": 5
+    },
+    "Dental_100_banan": {
+      "status": "high",
+      "wb_vol": 1.063,
+      "pct": 15
+    },
+    "CrioL50": {
+      "status": "ok",
+      "wb_vol": 16.169,
+      "pct": 0
+    },
+    "Zub_pasta_det": {
+      "status": "low",
+      "wb_vol": 0.345,
+      "pct": -1
+    },
+    "CrioGel_5": {
+      "status": "ok",
+      "wb_vol": 7.452,
+      "pct": 0
+    },
+    "CrioGel1l": {
+      "status": "high",
+      "wb_vol": 2.121,
+      "pct": 51
+    },
+    "Oral_cherry": {
+      "status": "ok",
+      "wb_vol": 0.208,
+      "pct": 0
+    },
+    "Crio_L25(new)": {
+      "status": "high",
+      "wb_vol": 8.303,
+      "pct": 11
+    },
+    "Cryolipolysis50": {
+      "status": "ok",
+      "wb_vol": 16.169,
+      "pct": 0
+    },
+    "Dental_100_zemlyanika": {
+      "status": "high",
+      "wb_vol": 1.008,
+      "pct": 9
+    },
+    "Dental_40": {
+      "status": "ok",
+      "wb_vol": 0.455,
+      "pct": -4
+    },
+    "Dental20": {
+      "status": "high",
+      "wb_vol": 0.294,
+      "pct": 25
+    },
+    "Dental_20_zemlyanika": {
+      "status": "low",
+      "wb_vol": 0.213,
+      "pct": -10
+    },
+    "Dental_100": {
+      "status": "ok",
+      "wb_vol": 0.924,
+      "pct": 0
+    },
+    "Dental_40_zemlyanika": {
+      "status": "ok",
+      "wb_vol": 0.49,
+      "pct": 4
+    }
+  }
+}
