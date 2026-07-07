@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import json
 import time
@@ -43,8 +44,11 @@ MP_TOKEN = os.environ.get("MPSTATS_TOKEN", "").strip()
 WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
 OZ_CID = os.environ.get("OZON_CLIENT_ID", "").strip()
 OZ_KEY = os.environ.get("OZON_API_KEY", "").strip()
-OZ_BANK_HEADER = "Цена с другими банками"   # колонка Ozon-блока Лист1, которую заполняем
+OZ_PROXY = os.environ.get("OZ_PROXY", "").strip()   # socks5://127.0.0.1:10808 (xray→Happ) для composer
 OZ_ENABLED = os.environ.get("PRICES_OZ_ENABLED", "") == "1"  # Ozon включается только после сверки
+OZ_HDR = {"J": "Текущая цена", "K": "Цена с другими банками", "L": "Цена с Озон картой"}
+OZ_SUB = ["текущая", "с банками", "с картой"]
+OZ_HIST_TAB = os.environ.get("PRICES_OZ_HISTORY_TAB", "история OZ")
 
 # Список артикулов НЕ хардкодится — берётся из кабинета WB (vendorCode→nmID).
 # Исключаем заведомо списанные/непрофильные (не добавлять их в Лист1/историю).
@@ -117,53 +121,88 @@ def ozon_offer_to_sku(offer_ids):
     return {it.get("offer_id"): it.get("sku") for it in (d.get("items") or []) if it.get("sku")}
 
 
-def mpstats_oz_final(sku):
-    d = _get(f"https://mpstats.io/api/oz/get/item/{sku}",
-             {"X-Mpstats-TOKEN": MP_TOKEN, "Content-Type": "application/json"})
-    return ((d or {}).get("item") or {}).get("final_price")
+def _money(x):
+    d = re.sub(r"[^\d]", "", str(x or ""))
+    return int(d) if d else None
 
 
-def oz_bank_prices(oz_names):
-    """{name: цена с картами других банков} по артикулам из Ozon-блока Лист1."""
-    if not oz_names:
-        return {}
-    sku_map = ozon_offer_to_sku(oz_names)
+def _oz_seller_current():
+    """{offer_id: текущая цена (цена реализации из кабинета)} = seller price."""
+    body = json.dumps({"cursor": "", "filter": {"visibility": "ALL"}, "limit": 1000}).encode()
+    req = urllib.request.Request("https://api-seller.ozon.ru/v5/product/info/prices",
+        data=body, method="POST",
+        headers={"Client-Id": OZ_CID, "Api-Key": OZ_KEY, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60, context=_ctx()) as r:
+        d = json.loads(r.read())
     out = {}
-    for name in oz_names:
-        sku = sku_map.get(name)
-        if not sku:
-            continue
-        try:
-            fp = mpstats_oz_final(sku)
-        except Exception as e:
-            print(f"[prices] MPStats oz {name}: {e}", flush=True)
-            fp = None
-        if fp:
-            out[name] = fp
-        time.sleep(0.25)
+    for it in d.get("items", []):
+        p = (it.get("price") or {}).get("price")
+        m = _money(p)
+        if m:
+            out[it.get("offer_id")] = m
     return out
 
 
-def write_oz_bank(sh, oz_data):
-    """Пишет «цену с другими банками» в Ozon-блок Лист1: по имени артикула в
-    колонке H, в колонку с заголовком OZ_BANK_HEADER (ищем по шапке, не по букве)."""
+def oz_full_prices(oz_names):
+    """{name: (текущая, с_банками, с_картой)}. текущая — seller-API; банки/карта —
+    composer витрины через OZ_PROXY (curl_cffi). 18+ снимаем через setBirthdate."""
+    from curl_cffi import requests as cr
+    sku_map = ozon_offer_to_sku(oz_names)
+    seller = _oz_seller_current()
+    s = cr.Session(impersonate="chrome")
+    if OZ_PROXY:
+        s.proxies = {"http": OZ_PROXY, "https": OZ_PROXY}
+    base = "https://www.ozon.ru/api/composer-api.bx/page/json/v2?url="
+    first = next(iter(sku_map.values()), None)
+    if first:
+        try:
+            s.get("https://www.ozon.ru/product/%s/" % first, timeout=40)
+            s.post("https://www.ozon.ru/api/composer-api.bx/_action/setBirthdate?isAlco=false",
+                   json={"birthdate": "1990-01-01"}, timeout=30)
+        except Exception as e:
+            print("[prices] oz warm/age: %s" % str(e)[:80], flush=True)
+    out = {}
+    for name in oz_names:
+        sid = sku_map.get(name)
+        bank = card = None
+        if sid:
+            try:
+                r = s.get(base + "%%2Fproduct%%2F%s%%2F" % sid, timeout=40)
+                w = json.loads(r.text).get("widgetStates", {})
+                for k in w:
+                    if k.startswith("webPrice"):
+                        v = json.loads(w[k])
+                        if "price" in v:
+                            bank, card = _money(v.get("price")), _money(v.get("cardPrice"))
+                            break
+            except Exception as e:
+                print("[prices] composer %s: %s" % (name, str(e)[:60]), flush=True)
+            time.sleep(0.4)
+        out[name] = (seller.get(name), bank, card)
+    return out
+
+
+def write_oz(sh, data):
+    """Пишет текущая/банки/карта в Ozon-блок Лист1 по имени артикула в колонке H
+    (колонки ищем по заголовкам, не по буквам). Пустые значения не трогают ячейку."""
     ws = sh.worksheet(SNAP_TAB)
-    header = ws.row_values(1)
-    kcol = None
-    for i, h in enumerate(header, start=1):
-        if (h or "").strip() == OZ_BANK_HEADER:
-            kcol = i
-            break
-    if not kcol:
-        print("[prices] колонка Ozon 'с другими банками' не найдена", flush=True)
-        return 0
-    col_h = ws.col_values(8)  # колонка H — артикулы Ozon-блока
+    hdr = ws.row_values(1)
+    cm = {}
+    for col, title in OZ_HDR.items():
+        for i, h in enumerate(hdr, 1):
+            if (h or "").strip() == title:
+                cm[col] = i
+                break
+    col_h = ws.col_values(8)
     reqs = []
     for row_i, name in enumerate(col_h, start=1):
         key = (name or "").strip()
-        if key in oz_data:
-            a1 = rowcol_to_a1(row_i, kcol)
-            reqs.append({"range": f"{SNAP_TAB}!{a1}", "values": [[oz_data[key]]]})
+        if key in data:
+            tek, bank, card = data[key]
+            for col, val in (("J", tek), ("K", bank), ("L", card)):
+                if cm.get(col) and val is not None:
+                    reqs.append({"range": "%s!%s" % (SNAP_TAB, rowcol_to_a1(row_i, cm[col])),
+                                 "values": [[val]]})
     if reqs:
         ws.spreadsheet.values_batch_update({"valueInputOption": "USER_ENTERED", "data": reqs})
     return len(reqs)
@@ -274,8 +313,9 @@ def _fmt_date_block(ws, sid, last_row):
     ]})
 
 
-def push_history_column(sh, data, now):
-    ws = sh.worksheet(HIST_TAB)
+def push_history_column(sh, data, now, tab=None, subhead=None):
+    ws = sh.worksheet(tab or HIST_TAB)
+    subhead = subhead or SUBHEAD
     sid = ws.id
     names = _article_rows(ws)
     # синхронизация артикулов: дописать новые (которых ещё нет в истории)
@@ -319,7 +359,7 @@ def push_history_column(sh, data, now):
         "inheritFromBefore": False}}]})
     date = now.strftime("%d.%m.%Y")
     ws.update([[date]], "C1", value_input_option="RAW")
-    ws.update([SUBHEAD], "C2")
+    ws.update([subhead], "C2")
     vals = [list(data.get(nm, ("", "", ""))) for nm in names]
     ws.update(vals, f"C3:E{last_row}", value_input_option="USER_ENTERED")
     _fmt_date_block(ws, sid, last_row)
@@ -356,28 +396,35 @@ def run():
 
     try:
         w = write_snapshot(sh, data)
-        # Ozon: «цена с картами других банков» (Лист1-driven — ловит новые артикулы из колонки H)
-        if OZ_CID and OZ_KEY and OZ_ENABLED:
-            try:
-                oz_names = {(v or "").strip() for v in l1.col_values(8)[1:]
-                            if (v or "").strip() and (v or "").strip() not in EXCLUDE
-                            and (v or "").strip() != "озон"}
-                oz_data = oz_bank_prices(oz_names)
-                kw = write_oz_bank(sh, oz_data)
-                print(f"[prices] Ozon 'с другими банками' обновлено: {kw}", flush=True)
-            except Exception as e:
-                print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
         if run_label == "13:00" and HIST_ENABLED:
             push_history_column(sh, data, now)
-            print(f"[prices] снимок {w} артик.; в историю добавлен столбец {now:%d.%m.%Y}", flush=True)
-        elif run_label == "13:00":
-            print(f"[prices] снимок {w} артик.; история на ПАУЗЕ (PRICES_HIST_ENABLED!=1)", flush=True)
+            print(f"[prices] WB: снимок {w}; столбец истории {now:%d.%m.%Y}", flush=True)
         else:
-            print(f"[prices] снимок {w} артик.; 07:00 — историю не трогаю", flush=True)
+            print(f"[prices] WB: снимок {w} (история — только 13:00/включена)", flush=True)
     except Exception as e:
-        print(f"[prices] ОШИБКА записи: {e}", flush=True)
-        _alert(f"⚠️ <b>Цены WB: ошибка записи в таблицу.</b>\nПрогон {run_label}. {str(e)[:200]}")
+        print(f"[prices] ОШИБКА WB-записи: {e}", flush=True)
+        _alert(f"⚠️ <b>Цены WB: ошибка записи.</b>\nПрогон {run_label}. {str(e)[:200]}")
         raise
+
+    # ---- Ozon (Лист1-driven, composer через прокси; не роняет WB-часть) ----
+    if OZ_CID and OZ_KEY and OZ_ENABLED:
+        try:
+            oz_names = {(v or "").strip() for v in l1.col_values(8)[1:]
+                        if (v or "").strip() and (v or "").strip() not in EXCLUDE
+                        and (v or "").strip() != "озон"}
+            oz_data = oz_full_prices(oz_names)
+            ozc = write_oz(sh, oz_data)
+            gotoz = sum(1 for v in oz_data.values() if v[1] is not None)
+            print(f"[prices] Ozon: записано ячеек {ozc}; с витриной {gotoz}/{len(oz_data)}", flush=True)
+            if run_label == "13:00" and HIST_ENABLED:
+                push_history_column(sh, oz_data, now, tab=OZ_HIST_TAB, subhead=OZ_SUB)
+                print(f"[prices] Ozon: столбец истории {now:%d.%m.%Y}", flush=True)
+            if OZ_PROXY and gotoz < len(oz_data) - ALLOWED_MISS:
+                _alert(f"⚠️ <b>Цены Ozon: витрина собралась только {gotoz}/{len(oz_data)}.</b>\n"
+                       f"Прогон {run_label}. Проверить прокси/composer.")
+        except Exception as e:
+            print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
+            _alert(f"⚠️ <b>Цены Ozon: сбой.</b>\nПрогон {run_label}. {str(e)[:200]}")
 
     if len(misses) > ALLOWED_MISS:
         _alert(f"⚠️ <b>Цены WB: собрано только {got}/{len(data)}.</b>\n"
