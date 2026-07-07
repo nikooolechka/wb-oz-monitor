@@ -317,6 +317,11 @@ def push_history_column(sh, data, now, tab=None, subhead=None):
     ws = sh.worksheet(tab or HIST_TAB)
     subhead = subhead or SUBHEAD
     sid = ws.id
+    # страховка от дублей: если столбец сегодняшней даты уже есть (C1) — не добавляем второй
+    today = now.strftime("%d.%m.%Y")
+    if (ws.acell("C1").value or "").strip() == today:
+        print("[prices] история %s: столбец %s уже есть — пропуск" % (tab or HIST_TAB, today), flush=True)
+        return
     names = _article_rows(ws)
     # синхронизация артикулов: дописать новые (которых ещё нет в истории)
     missing = [n for n in data if n not in set(names)]
