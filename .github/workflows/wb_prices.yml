@@ -33,6 +33,7 @@ jobs:
           WB_TOKEN: ${{ secrets.WB_TOKEN }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
+          PRICES_HIST_ENABLED: ${{ secrets.PRICES_HIST_ENABLED }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY: ${{ github.event.inputs.dry }}
