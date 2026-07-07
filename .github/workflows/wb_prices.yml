@@ -34,6 +34,8 @@ jobs:
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
           PRICES_HIST_ENABLED: ${{ secrets.PRICES_HIST_ENABLED }}
+          OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
+          OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY: ${{ github.event.inputs.dry }}
