@@ -1,0 +1,31 @@
+name: ЯМ проба 2 (headless Chromium)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install curl_cffi==0.15.0 playwright && python -m playwright install --with-deps chromium
+      - name: xray(Happ) + Chromium проба ЯМ
+        env:
+          OZ_PROXY: "socks5://127.0.0.1:10808"
+          HAPP_SUB_URL: ${{ secrets.HAPP_SUB_URL }}
+          HAPP_HWID: ${{ secrets.HAPP_HWID }}
+          YM_CARD: "https://market.yandex.ru/card/detskiye-vlazhnyye-salfetki-s-ksilitom-as-farm-20-sht-dlya-zubov-i-polosti-rta/102196144368"
+        run: |
+          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+          unzip -o -q xray.zip xray && chmod +x xray
+          python3 setup_oz_proxy.py || echo "прокси не поднялся — пробую напрямую"
+          echo "=== через прокси Happ ==="
+          python3 ym_probe2.py || true
+          echo "=== напрямую (без прокси, US-IP) ==="
+          OZ_PROXY="" python3 ym_probe2.py || true
