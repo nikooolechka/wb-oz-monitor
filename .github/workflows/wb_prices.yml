@@ -1,0 +1,39 @@
+name: Витринные цены WB
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = только лог, без записи"
+        default: ""
+  schedule:
+    - cron: "0 4 * * *"    # 07:00 МСК — обновляет снимок (Лист1)
+    - cron: "0 10 * * *"   # 13:00 МСК — снимок + новый столбец в «история»
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wb-prices
+  cancel-in-progress: false
+
+jobs:
+  prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Сбор и запись витринных цен WB
+        env:
+          MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: python wb_prices.py
