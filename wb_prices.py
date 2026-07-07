@@ -42,19 +42,10 @@ HIST_TAB = os.environ.get("PRICES_HISTORY_TAB", "история WB")
 MP_TOKEN = os.environ.get("MPSTATS_TOKEN", "").strip()
 WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
 
-ACTIVE = [
-    ("Dental_100", 205348527), ("Dental_100_zemlyanika", 583154383),
-    ("Dental_100_banan", 583155047), ("Dental_40", 140759945),
-    ("Dental_40_zemlyanika", 860793985), ("Dental_40_natural", 892991707),
-    ("Dental20", 76952248), ("Dental_20_zemlyanika", 860789726),
-    ("Dental50", 140595726), ("Irrigator_500", 227067968),
-    ("Irrigator_1000", 363137625), ("CrioGel1l", 93054004),
-    ("CrioGel_5", 388153628), ("cryolipolysis25", 76942273),
-    ("Cryolipolysis50", 87180591), ("Crio_L25(new)", 97076035),
-    ("CrioL50", 144662550), ("OptikaSpray_new", 206024627),
-    ("Zub_pasta_det", 917665198), ("Oral_cherry", 1055320329),
-    ("spraydlyapolostyrta", 349314212),
-]
+# Список артикулов НЕ хардкодится — берётся из кабинета WB (vendorCode→nmID).
+# Исключаем заведомо списанные/непрофильные (не добавлять их в Лист1/историю).
+EXCLUDE = {"Dental100_Animal", "Lapomoyka_500", "Gel_peeling", "Spray_fresh_new",
+           "men_spray", "makeup_30"}
 SUBHEAD = ["до СПП", "с СПП", "с кошельком"]
 MONTHS_RU = {1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕЛЬ", 5: "МАЙ", 6: "ИЮНЬ",
              7: "ИЮЛЬ", 8: "АВГУСТ", 9: "СЕНТЯБРЬ", 10: "ОКТЯБРЬ", 11: "НОЯБРЬ", 12: "ДЕКАБРЬ"}
@@ -63,6 +54,7 @@ MONTHS_RU = {1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕ
 HEADER_BG = {"red": 0.6, "green": 0.0, "blue": 1.0}
 GRAYM_BG = {"red": 0.7176471, "green": 0.7176471, "blue": 0.7176471}
 SUB_BG = {"red": 0.9294118, "green": 0.9294118, "blue": 0.9294118}
+ART_BG = {"red": 0.8470588, "green": 0.9098039, "blue": 0.9568627}
 WHITE = {"red": 1, "green": 1, "blue": 1}
 
 
@@ -88,14 +80,17 @@ def _get(url, headers, retries=3):
     raise RuntimeError(f"{url[:50]} → {last}")
 
 
-def seller_before_spp():
+def cabinet():
+    """{vendorCode: {'nm': nmID, 'do': цена продавца до СПП}} из кабинета WB."""
     d = _get("https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000",
              {"Authorization": WB_TOKEN})
-    out = {}
+    m = {}
     for g in (d.get("data") or {}).get("listGoods") or []:
-        sizes = g.get("sizes") or [{}]
-        out[g.get("nmID")] = sizes[0].get("discountedPrice")
-    return out
+        vc = (g.get("vendorCode") or "").strip()
+        dp = (g.get("sizes") or [{}])[0].get("discountedPrice")
+        if vc:
+            m[vc] = {"nm": g.get("nmID"), "do": round(dp) if dp else None}
+    return m
 
 
 def mpstats_prices(nm):
@@ -105,20 +100,26 @@ def mpstats_prices(nm):
     return it.get("final_price"), it.get("wallet_price")
 
 
-def collect():
-    seller = seller_before_spp()
+def collect(l1_names):
+    """Отслеживаем РОВНО артикулы из Лист1 (колонка B, WB-блок) — контролируемый
+    владельцем список. SKU резолвим авто из кабинета по vendorCode. Новый артикул,
+    добавленный в Лист1, подхватывается сам (по нему парсятся цены + строка в истории).
+    Возвращает (data{name:(до,спп,кошелёк)}, misses)."""
+    cab = cabinet()
     data, misses = {}, []
-    for name, nm in ACTIVE:
+    for name in l1_names:
+        if name in EXCLUDE or name not in cab:
+            continue
+        info = cab[name]
         try:
-            final_p, wallet_p = mpstats_prices(nm)
+            sp, wp = mpstats_prices(info["nm"])
         except Exception as e:
             print(f"[prices] MPStats {name}: {e}", flush=True)
-            final_p = wallet_p = None
-        before = seller.get(nm)
-        before = round(before) if before else None
-        if final_p is None or before is None:
+            sp = wp = None
+        do = info["do"]
+        if sp is None or do is None:
             misses.append(name)
-        data[name] = (before, final_p, wallet_p)
+        data[name] = (do, sp, wp)
         time.sleep(0.25)
     return data, misses
 
@@ -131,15 +132,16 @@ def _open():
 
 
 def write_snapshot(sh, data):
+    """Обновляет C/D/E по имени артикула в колонке B. F (формула СПП) и другие
+    площадки не трогает. Новый артикул, добавленный владельцем в B, получит цены."""
     ws = sh.worksheet(SNAP_TAB)
     col_b = ws.col_values(2)
     reqs, written = [], 0
     for row_i, name in enumerate(col_b, start=1):
         key = (name or "").strip()
         if key in data:
-            before, spp, wallet = data[key]
-            reqs.append({"range": f"{SNAP_TAB}!C{row_i}:E{row_i}",
-                         "values": [[before, spp, wallet]]})
+            b, s, w = data[key]
+            reqs.append({"range": f"{SNAP_TAB}!C{row_i}:E{row_i}", "values": [[b, s, w]]})
             written += 1
     if reqs:
         ws.spreadsheet.values_batch_update(
@@ -207,6 +209,21 @@ def push_history_column(sh, data, now):
     ws = sh.worksheet(HIST_TAB)
     sid = ws.id
     names = _article_rows(ws)
+    # синхронизация артикулов: дописать новые (которых ещё нет в истории)
+    missing = [n for n in data if n not in set(names)]
+    if missing:
+        start = 3 + len(names)
+        ws.update([[n] for n in missing], f"A{start}", value_input_option="RAW")
+        ws.spreadsheet.batch_update({"requests": [
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": start - 1,
+                "endRowIndex": start - 1 + len(missing), "startColumnIndex": 0, "endColumnIndex": 1},
+                "cell": {"userEnteredFormat": {"backgroundColor": ART_BG, "verticalAlignment": "MIDDLE",
+                    "textFormat": {"bold": True}}}, "fields": "userEnteredFormat"}},
+            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": start - 1,
+                "endRowIndex": start - 1 + len(missing), "startColumnIndex": 1, "endColumnIndex": 2},
+                "cell": {"userEnteredFormat": {"backgroundColor": GRAYM_BG}}, "fields": "userEnteredFormat"}},
+        ]})
+        names = names + missing
     last_row = 2 + len(names)
     cur_label = (ws.acell("B1").value or "").strip().upper()
     new_label = MONTHS_RU[now.month]
@@ -255,17 +272,20 @@ def run():
     if not MP_TOKEN or not WB_TOKEN:
         raise RuntimeError("нет MPSTATS_TOKEN / WB_TOKEN")
 
-    data, misses = collect()
+    if not SHEET_ID:
+        raise RuntimeError("нет PRICES_SHEET_ID")
+    sh = _open()
+    l1 = sh.worksheet(SNAP_TAB)
+    l1_names = {(v or "").strip() for v in l1.col_values(2) if (v or "").strip()}
+
+    data, misses = collect(l1_names)
     got = sum(1 for v in data.values() if v[1] is not None)
     print(f"[prices] {run_label}: собрано {got}/{len(data)}; без цены: {misses}", flush=True)
 
-    if not SHEET_ID:
-        print("[prices] PRICES_SHEET_ID не задан — только сбор", flush=True); return
     if DRY:
         print("[prices][DRY] запись пропущена", flush=True); return
 
     try:
-        sh = _open()
         w = write_snapshot(sh, data)
         if run_label == "13:00" and HIST_ENABLED:
             push_history_column(sh, data, now)
