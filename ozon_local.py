@@ -1,14 +1,21 @@
-"""Проверка оферты (договора поставки) Ozon через Scrapfly.
+"""Проверка оферт/договоров Ozon для продавцов через Scrapfly.
 
-docs.ozon.ru нельзя спарсить напрямую — жёсткий антибот (режет даже резидентные
-IP и headless-браузеры). Scrapfly с режимом ASP его обходит (проверено 5/5),
-отдаёт полный документ. Скрипт тянет текст договора, сравнивает с прошлой
-версией и при изменении шлёт выжимку в Telegram; если без изменений — пишет
-статус «изменений не обнаружено».
+docs.ozon.ru нельзя спарсить напрямую — жёсткий антибот. Scrapfly (ASP +
+render_js + RU) его обходит, отдаёт документ. Берём блок <article> каждого
+документа, сравниваем с эталоном, и раз в 5 дней шлём в канал ОДНО сообщение:
+изменений нет — по шаблону; есть — с указанием, в каком документе.
 
-КООРДИНАЦИЯ ДВУХ МАКОВ: общее состояние — в репозитории (data/ozon_shared.json)
-через GitHub API. Если сегодня Ozon уже проверен, второй Мак пропускает.
+Документы (для продавца товаров):
+  • Договор поставки            /legal/partners/b2b/standard-terms
+  • Условия оказания услуг       /legal/partners/b2b/service-terms
+  • Условия выполнения работ     /legal/partners/b2b/contract-work-terms
+  • Золотые правила безопасности /legal/partners/b2b/safety-rules
 
+Частота: раз в 5 дней (самотроттлинг по дате в общем состоянии). Воркфлоу может
+запускаться хоть ежедневно — в «нерабочие» дни скрипт молча выходит, Scrapfly
+не тратит. 4 док × ~30 кред = ~120/прогон, ~720/мес (в рамках бюджета 800).
+
+Состояние (коорд. + эталоны) — data/ozon_shared.json через GitHub API.
 Секреты — из ~/.wb-oz-monitor/.env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
 ANTHROPIC_API_KEY, GITHUB_TOKEN, GITHUB_REPO, SCRAPFLY_KEY.
 """
@@ -19,17 +26,25 @@ import sys
 import json
 import base64
 import hashlib
-import subprocess
 from datetime import datetime, timezone, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME_DIR = os.path.expanduser("~/.wb-oz-monitor")
 ENV_FILE = os.path.join(HOME_DIR, ".env")
-
-OZON_URL = "https://docs.ozon.ru/legal/partners/b2b/standard-terms/"
-OZON_TITLE = "Ozon — Условия договора поставки (B2B, для продавцов)"
 SHARED_PATH = "data/ozon_shared.json"
 MSK = timezone(timedelta(hours=3))
+CHECK_EVERY_DAYS = 5
+
+OZON_DOCS = [
+    {"key": "standard-terms", "title": "Договор поставки",
+     "url": "https://docs.ozon.ru/legal/partners/b2b/standard-terms/"},
+    {"key": "service-terms", "title": "Условия оказания услуг",
+     "url": "https://docs.ozon.ru/legal/partners/b2b/service-terms/"},
+    {"key": "contract-work-terms", "title": "Условия выполнения работ (подряд)",
+     "url": "https://docs.ozon.ru/legal/partners/b2b/contract-work-terms/"},
+    {"key": "safety-rules", "title": "Золотые правила безопасности",
+     "url": "https://docs.ozon.ru/legal/partners/b2b/safety-rules/"},
+]
 
 
 def load_env() -> None:
@@ -52,18 +67,25 @@ def now_msk_str() -> str:
     return datetime.now(MSK).strftime("%d.%m.%Y %H:%M МСК")
 
 
-def fetch_ozon_text() -> str:
-    """Тянет договор Ozon через Scrapfly: ASP обходит антибот, RU-прокси + JS-рендер.
-    Возвращает текст блока <article> (договор без бокового меню). Работает из
-    облака/с любого Мака — не зависит от Safari."""
+def _days_since(date_str: str) -> int:
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        return (datetime.now(MSK).date() - d).days
+    except Exception:
+        return 10 ** 6
+
+
+def fetch_doc(url: str) -> str:
+    """Тянет документ Ozon через Scrapfly (ASP+render_js+RU), возвращает текст
+    блока <article> (без бокового меню). Работает из облака, без Мака."""
     import re
     import requests
     from urllib.parse import quote
-    key = os.environ.get("SCRAPFLY_KEY", "").strip()  # читаем после load_env()
+    key = os.environ.get("SCRAPFLY_KEY", "").strip()
     api = ("https://api.scrapfly.io/scrape?key=" + key
-           + "&url=" + quote(OZON_URL, safe="")
+           + "&url=" + quote(url, safe="")
            + "&asp=true&render_js=true&country=ru")
-    r = requests.get(api, timeout=120)
+    r = requests.get(api, timeout=180)
     r.raise_for_status()
     html = ((r.json().get("result") or {}).get("content") or "")
     m = re.search(r"(?is)<article[^>]*>(.*?)</article>", html)
@@ -71,13 +93,12 @@ def fetch_ozon_text() -> str:
     sys.path.insert(0, HERE)
     from sources import _strip_html
     text = _strip_html(chunk)
-    if "договор" not in text.lower() or len(text) < 2000:
-        raise RuntimeError("Scrapfly вернул не тот контент (договор не найден)")
+    if len(text) < 1000:
+        raise RuntimeError("Scrapfly вернул не тот контент (документ не найден)")
     return text
 
 
 def _gh_headers() -> dict:
-    import requests  # noqa: F401 (ensure available)
     return {
         "Authorization": f"Bearer {os.environ['GITHUB_TOKEN'].strip()}",
         "Accept": "application/vnd.github+json",
@@ -86,7 +107,6 @@ def _gh_headers() -> dict:
 
 
 def read_shared() -> tuple[dict, str | None]:
-    """Возвращает (данные, sha файла). Пустой dict если файла нет."""
     import requests
     repo = os.environ["GITHUB_REPO"].strip()
     url = f"https://api.github.com/repos/{repo}/contents/{SHARED_PATH}?ref=main"
@@ -104,7 +124,7 @@ def write_shared(data: dict, sha: str | None) -> None:
     repo = os.environ["GITHUB_REPO"].strip()
     url = f"https://api.github.com/repos/{repo}/contents/{SHARED_PATH}"
     body = {
-        "message": "ozon coordination update",
+        "message": "ozon oferta state update",
         "content": base64.b64encode(
             json.dumps(data, ensure_ascii=False).encode("utf-8")).decode(),
         "branch": "main",
@@ -113,6 +133,16 @@ def write_shared(data: dict, sha: str | None) -> None:
         body["sha"] = sha
     r = requests.put(url, headers=_gh_headers(), json=body, timeout=30)
     r.raise_for_status()
+
+
+def _migrate(shared: dict) -> dict:
+    """Старый одно-документный формат {hash,text} → новый {docs:{...}}."""
+    if "docs" in shared:
+        return shared
+    docs = {}
+    if shared.get("hash"):
+        docs["standard-terms"] = {"hash": shared["hash"], "text": shared.get("text", "")}
+    return {"date": shared.get("date", ""), "docs": docs}
 
 
 def main() -> None:
@@ -125,69 +155,84 @@ def main() -> None:
 
     has_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
-    # 1) общий флаг: проверено ли сегодня (координация двух Маков)
     try:
         shared, sha = read_shared()
     except Exception as e:
-        print(f"[WARN] не прочитал общий флаг: {e}", flush=True)
+        print(f"[WARN] не прочитал состояние: {e}", flush=True)
         return
-    if shared.get("date") == today_msk():
-        print("[SKIP] Ozon уже проверен сегодня — пропускаю (другой Мак)", flush=True)
+    shared = _migrate(shared)
+    docs_state = shared.get("docs", {})
+
+    # самотроттлинг: проверяем раз в CHECK_EVERY_DAYS дней
+    last = shared.get("date", "")
+    if last and _days_since(last) < CHECK_EVERY_DAYS:
+        print(f"[SKIP] Ozon: последняя проверка {last}, ещё не прошло {CHECK_EVERY_DAYS} дн — пропуск", flush=True)
         return
 
-    # 2) читаем документ из Safari
-    try:
-        raw = fetch_ozon_text()
-    except Exception as e:
-        print(f"[WARN] Ozon (Safari): {e}", flush=True)
-        return  # дату НЕ ставим — пусть следующий запуск/Мак попробует снова
+    changed = []       # (title, url, summary)
+    fetched_any = False
+    for d in OZON_DOCS:
+        try:
+            raw = fetch_doc(d["url"])
+        except Exception as e:
+            print(f"[WARN] {d['key']}: {e}", flush=True)
+            continue  # эталон этого дока не трогаем, попробуем в следующий раз
+        fetched_any = True
+        text = normalize(raw)
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        prev = docs_state.get(d["key"]) or {}
+        prev_hash = prev.get("hash")
 
-    text = normalize(raw)
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    prev_hash = shared.get("hash")
+        if not prev_hash:
+            # первая фиксация документа — эталон, без «изменения»
+            docs_state[d["key"]] = {"hash": digest, "text": text}
+            print(f"[OK] {d['key']}: эталон зафиксирован", flush=True)
+            continue
 
-    # 3) первая фиксация
-    if not prev_hash:
-        write_shared({"date": today_msk(), "hash": digest, "text": text}, sha)
+        if digest == prev_hash:
+            print(f"[OK] {d['key']}: без изменений", flush=True)
+            continue
+
+        # изменение
+        diff_text = make_diff(prev.get("text", ""), text)
+        try:
+            summary = summarize("OZON", d["title"], diff_text) if has_llm else fallback_summary(diff_text)
+        except Exception as e:
+            print(f"[WARN] выжимка {d['key']}: {e}", flush=True)
+            summary = fallback_summary(diff_text)
+        docs_state[d["key"]] = {"hash": digest, "text": text}
+        if summary is None:
+            print(f"[INFO] {d['key']}: изменение незначимо", flush=True)
+            continue
+        changed.append((d["title"], d["url"], summary))
+
+    if not fetched_any:
+        print("[WARN] Ozon: ни один документ не получен — состояние не трогаю", flush=True)
+        return
+
+    # обновляем состояние (дата + эталоны) — один раз за прогон
+    shared["date"] = today_msk()
+    shared["docs"] = docs_state
+    write_shared(shared, sha)
+
+    # ОДНО сообщение в канал за прогон
+    if not changed:
         notify.send(
-            "🔵 <b>Ozon подключён к мониторингу</b>\n"
-            f"Отслеживаю «{OZON_TITLE}». Сообщу при изменении."
-        )
-        print("[OK] Ozon: базовая версия зафиксирована", flush=True)
-        return
-
-    # 4) без изменений — помечаем день, пишем в чат «всё проверено, изменений нет»
-    if digest == prev_hash:
-        shared["date"] = today_msk()
-        write_shared(shared, sha)
-        notify.send(
-            "🔵 <b>Ozon проверен</b> — изменений в договоре не обнаружено ✅\n"
-            f"<i>{now_msk_str()}</i>"
+            "🔵 Ozon проверен — изменений в договоре не обнаружено ✅\n"
+            f"{now_msk_str()}"
         )
         print("[OK] Ozon: без изменений (статус отправлен)", flush=True)
         return
 
-    # 5) изменение — выжимка + уведомление
-    diff_text = make_diff(shared.get("text", ""), text)
-    try:
-        summary = summarize("OZON", OZON_TITLE, diff_text) if has_llm else fallback_summary(diff_text)
-    except Exception as e:
-        print(f"[WARN] выжимка: {e}", flush=True)
-        summary = fallback_summary(diff_text)
-
-    write_shared({"date": today_msk(), "hash": digest, "text": text}, sha)
-
-    if summary is None:
-        print("[INFO] Ozon: изменение незначимо", flush=True)
-        return
-
-    notify.send(
-        "🔵 Ozon — <b>изменение в документе</b>\n"
-        f"<b>{_html.escape(OZON_TITLE)}</b>\n\n"
-        f"{_html.escape(summary)}\n\n"
-        f"🔗 {OZON_URL}"
-    )
-    print("[ALERT] Ozon: отправлено уведомление", flush=True)
+    lines = ["🔵 Ozon — <b>обнаружены изменения в документах:</b>", ""]
+    for title, url, summary in changed:
+        lines.append(f"<b>{_html.escape(title)}</b>")
+        lines.append(_html.escape(summary))
+        lines.append(f"🔗 {url}")
+        lines.append("")
+    lines.append(now_msk_str())
+    notify.send("\n".join(lines).strip())
+    print(f"[ALERT] Ozon: отправлено ({len(changed)} докум. изменилось)", flush=True)
 
 
 if __name__ == "__main__":
