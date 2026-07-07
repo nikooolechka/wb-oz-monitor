@@ -4,19 +4,19 @@
   до СПП       — WB seller-API discounts-prices (discountedPrice)
   с СПП        — MPStats item.final_price
   с кошельком  — MPStats item.wallet_price
-  (СПП % считает формула в самой таблице, столбец F Лист1 — НЕ трогаем)
 
 Пишет в spreadsheet PRICES_SHEET_ID:
   • Лист1 (СНИМОК) — WB-блок: по имени артикула в колонке B ставит C/D/E.
-    Столбец F (формула СПП) и другие площадки не трогает. Оба прогона (07:00/13:00).
-  • «история» (СВОДНАЯ МАТРИЦА) — только прогон 13:00 (последний за день):
-    артикулы слева по строкам; даты блоками сверху, СВЕЖАЯ ДАТА СЛЕВА (каждый
-    день вставляется 3 новых столбца после колонки артикулов); под датой —
-    до СПП / с СПП / с кошельком.
+    Столбец F (формула СПП) и другие площадки не трогает. Оба прогона.
+  • «история WB» (СВОДНАЯ МАТРИЦА) — только прогон 13:00. Дизайн владельца:
+    A=Артикул(закр.) | B=серый столбец месяца (вертик.) | блоки дат по 3 столбца,
+    свежая дата сразу за серым (C:E), старее — правее. При смене месяца
+    прошедший месяц группируется+сворачивается, новый серый месяц — слева.
+    Раскладка/стиль — см. память reference_prices_history_layout.
 
 Источники — MPStats + WB seller-API (Scrapfly НЕ нужен). Облако (GitHub Actions).
-Секреты: MPSTATS_TOKEN, WB_TOKEN, GSHEETS_SA_JSON, PRICES_SHEET_ID,
-(опц.) TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+Запись истории включается env PRICES_HIST_ENABLED=1.
+Секреты: MPSTATS_TOKEN, WB_TOKEN, GSHEETS_SA_JSON, PRICES_SHEET_ID, TELEGRAM_*.
 """
 from __future__ import annotations
 
@@ -28,21 +28,20 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 
 import gspread
+from gspread.utils import rowcol_to_a1
 from google.oauth2.service_account import Credentials
 
 MSK = timezone(timedelta(hours=3))
 DRY = os.environ.get("DRY") == "1"
 ALLOWED_MISS = 2
+HIST_ENABLED = os.environ.get("PRICES_HIST_ENABLED", "") == "1"
 SHEET_ID = os.environ.get("PRICES_SHEET_ID", "").strip()
 SNAP_TAB = os.environ.get("PRICES_SNAPSHOT_TAB", "Лист1")
 HIST_TAB = os.environ.get("PRICES_HISTORY_TAB", "история WB")
-# запись истории включается только когда формат подогнан под финальный дизайн владельца
-HIST_ENABLED = os.environ.get("PRICES_HIST_ENABLED", "") == "1"
 
 MP_TOKEN = os.environ.get("MPSTATS_TOKEN", "").strip()
 WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
 
-# Активные артикулы WB (имя как в колонке B Лист1). Порядок = строки в «история».
 ACTIVE = [
     ("Dental_100", 205348527), ("Dental_100_zemlyanika", 583154383),
     ("Dental_100_banan", 583155047), ("Dental_40", 140759945),
@@ -56,15 +55,15 @@ ACTIVE = [
     ("Zub_pasta_det", 917665198), ("Oral_cherry", 1055320329),
     ("spraydlyapolostyrta", 349314212),
 ]
-ART_ORDER = [n for n, _ in ACTIVE]
 SUBHEAD = ["до СПП", "с СПП", "с кошельком"]
+MONTHS_RU = {1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕЛЬ", 5: "МАЙ", 6: "ИЮНЬ",
+             7: "ИЮЛЬ", 8: "АВГУСТ", 9: "СЕНТЯБРЬ", 10: "ОКТЯБРЬ", 11: "НОЯБРЬ", 12: "ДЕКАБРЬ"}
 
-# Палитра
-BLUE = {"red": 0.106, "green": 0.424, "blue": 0.659}   # шапка даты
-GREY = {"red": 0.93, "green": 0.93, "blue": 0.93}       # подшапка
-ART_BG = {"red": 0.85, "green": 0.91, "blue": 0.96}     # колонка артикулов
+# стиль владельца (считан из листа)
+HEADER_BG = {"red": 0.6, "green": 0.0, "blue": 1.0}
+GRAYM_BG = {"red": 0.7176471, "green": 0.7176471, "blue": 0.7176471}
+SUB_BG = {"red": 0.9294118, "green": 0.9294118, "blue": 0.9294118}
 WHITE = {"red": 1, "green": 1, "blue": 1}
-LINE = {"red": 0.7, "green": 0.7, "blue": 0.7}
 
 
 def _ctx():
@@ -132,7 +131,6 @@ def _open():
 
 
 def write_snapshot(sh, data):
-    """Обновляет WB-блок Лист1: по имени артикула в B ставит C/D/E. F не трогает."""
     ws = sh.worksheet(SNAP_TAB)
     col_b = ws.col_values(2)
     reqs, written = [], 0
@@ -149,109 +147,96 @@ def write_snapshot(sh, data):
     return written
 
 
-def _ensure_history(sh):
-    """Создаёт каркас «история»: A1 угол, A2 'Артикул', A3.. артикулы; заморозка."""
-    try:
-        ws = sh.worksheet(HIST_TAB)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=HIST_TAB, rows=max(40, len(ART_ORDER) + 5), cols=8)
+# ---------- история ----------
+def _article_rows(ws):
+    """Имена артикулов из колонки A начиная со строки 3 (без хвостовых пустых)."""
     col_a = ws.col_values(1)
-    have = (col_a[1].strip() if len(col_a) > 1 else "")
-    if have != "Артикул":
-        ws.update([["ВБ · цены"]], "A1")
-        ws.update([["Артикул"]], "A2")
-        ws.update([[n] for n in ART_ORDER], "A3")
-        sid = ws.id
-        ws.spreadsheet.batch_update({"requests": [
-            {"updateSheetProperties": {"properties": {"sheetId": sid, "gridProperties": {
-                "frozenRowCount": 2, "frozenColumnCount": 1}},
-                "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}},
-            # A1 угол
-            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-                "startColumnIndex": 0, "endColumnIndex": 1},
-                "cell": {"userEnteredFormat": {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
-                    "verticalAlignment": "MIDDLE",
-                    "textFormat": {"bold": True, "foregroundColor": WHITE}}},
-                "fields": "userEnteredFormat"}},
-            # A2 "Артикул"
-            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
-                "startColumnIndex": 0, "endColumnIndex": 1},
-                "cell": {"userEnteredFormat": {"backgroundColor": GREY, "horizontalAlignment": "CENTER",
-                    "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}}},
-                "fields": "userEnteredFormat"}},
-            # колонка артикулов A3..
-            {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": 2 + len(ART_ORDER),
-                "startColumnIndex": 0, "endColumnIndex": 1},
-                "cell": {"userEnteredFormat": {"backgroundColor": ART_BG, "verticalAlignment": "MIDDLE",
-                    "textFormat": {"bold": True}}},
-                "fields": "userEnteredFormat"}},
-            # ширина колонки артикулов
-            {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
-                "startIndex": 0, "endIndex": 1}, "properties": {"pixelSize": 165}, "fields": "pixelSize"}},
-        ]})
-    return ws
+    names = [(col_a[i] or "").strip() for i in range(2, len(col_a))]
+    while names and names[-1] == "":
+        names.pop()
+    return names
+
+
+def _setup_month_col(ws, sid, label, last_row):
+    """Оформляет серый столбец месяца B (после вставки пустого столбца в индекс 1)."""
+    ws.update([[label]], "B1", value_input_option="RAW")
+    ws.spreadsheet.batch_update({"requests": [
+        {"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 2,
+            "startColumnIndex": 1, "endColumnIndex": 2}, "mergeType": "MERGE_ALL"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": last_row,
+            "startColumnIndex": 1, "endColumnIndex": 2},
+            "cell": {"userEnteredFormat": {"backgroundColor": GRAYM_BG, "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "fontSize": 7},
+                "textRotation": {"vertical": True}}},
+            "fields": "userEnteredFormat"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+            "startIndex": 1, "endIndex": 2}, "properties": {"pixelSize": 24}, "fields": "pixelSize"}},
+    ]})
+
+
+def _fmt_date_block(ws, sid, last_row):
+    """Оформляет блок свежей даты — он всегда в столбцах C:E (индексы 2..4)."""
+    ws.spreadsheet.batch_update({"requests": [
+        {"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
+            "startColumnIndex": 2, "endColumnIndex": 5}, "mergeType": "MERGE_ALL"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
+            "startColumnIndex": 2, "endColumnIndex": 5},
+            "cell": {"userEnteredFormat": {"backgroundColor": HEADER_BG, "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "foregroundColor": WHITE}}},
+            "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
+            "startColumnIndex": 2, "endColumnIndex": 4},
+            "cell": {"userEnteredFormat": {"backgroundColor": SUB_BG, "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
+            "startColumnIndex": 4, "endColumnIndex": 5},
+            "cell": {"userEnteredFormat": {"backgroundColor": SUB_BG, "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "fontSize": 8}, "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": last_row,
+            "startColumnIndex": 2, "endColumnIndex": 5},
+            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+            "fields": "userEnteredFormat"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+            "startIndex": 2, "endIndex": 5}, "properties": {"pixelSize": 73}, "fields": "pixelSize"}},
+    ]})
 
 
 def push_history_column(sh, data, now):
-    """Вставляет 3 новых столбца слева (после артикулов) со свежей датой."""
-    ws = _ensure_history(sh)
+    ws = sh.worksheet(HIST_TAB)
     sid = ws.id
-    nart = len(ART_ORDER)
-    last = 2 + nart  # последняя строка с данными (1-based)
+    names = _article_rows(ws)
+    last_row = 2 + len(names)
+    cur_label = (ws.acell("B1").value or "").strip().upper()
+    new_label = MONTHS_RU[now.month]
+    month_changed = bool(cur_label) and cur_label != new_label
 
-    # порядок артикулов берём из колонки A (на случай ручной правки)
-    col_a = ws.col_values(1)
-    names = [(col_a[i].strip() if i < len(col_a) else "") for i in range(2, 2 + nart)]
+    if month_changed:
+        # 1) группируем + сворачиваем столбцы-даты прошедшего месяца (C..последний с датой)
+        row2 = ws.row_values(2)
+        lastcol = len(row2)   # 1-based кол-во заполненных ячеек в строке подшапки
+        if lastcol >= 3:
+            grp = {"sheetId": sid, "dimension": "COLUMNS", "startIndex": 2, "endIndex": lastcol}
+            ws.spreadsheet.batch_update({"requests": [{"addDimensionGroup": {"range": grp}}]})
+            ws.spreadsheet.batch_update({"requests": [{"updateDimensionGroup": {
+                "dimensionGroup": {"range": grp, "depth": 1, "collapsed": True}, "fields": "collapsed"}}]})
+        # 2) новый серый столбец месяца — слева (индекс 1)
+        ws.spreadsheet.batch_update({"requests": [{"insertDimension": {"range": {
+            "sheetId": sid, "dimension": "COLUMNS", "startIndex": 1, "endIndex": 2},
+            "inheritFromBefore": False}}]})
+        _setup_month_col(ws, sid, new_label, last_row)
 
-    # 1) вставить 3 столбца по индексу 1 (перед B) — свежая дата слева
-    ws.spreadsheet.batch_update({"requests": [
-        {"insertDimension": {"range": {"sheetId": sid, "dimension": "COLUMNS",
-            "startIndex": 1, "endIndex": 4}, "inheritFromBefore": False}},
-    ]})
-
-    # 2) значения
+    # блок свежей даты — 3 столбца в индекс 2 (C), сразу за серым столбцом месяца
+    ws.spreadsheet.batch_update({"requests": [{"insertDimension": {"range": {
+        "sheetId": sid, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 5},
+        "inheritFromBefore": False}}]})
     date = now.strftime("%d.%m.%Y")
-    ws.update([[date]], "B1", value_input_option="RAW")   # текстом, чтобы не стало числом-серийником
-    ws.update([SUBHEAD], "B2")
-    vals = []
-    for nm in names:
-        b, s, w = data.get(nm, ("", "", ""))
-        vals.append([b, s, w])
-    ws.update(vals, f"B3:D{2 + len(vals)}", value_input_option="USER_ENTERED")
-
-    # 3) оформление нового блока
-    ws.spreadsheet.batch_update({"requests": [
-        # объединить дату B1:D1
-        {"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-            "startColumnIndex": 1, "endColumnIndex": 4}, "mergeType": "MERGE_ALL"}},
-        # дата — синяя шапка
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-            "startColumnIndex": 1, "endColumnIndex": 4},
-            "cell": {"userEnteredFormat": {"backgroundColor": BLUE, "horizontalAlignment": "CENTER",
-                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "foregroundColor": WHITE}}},
-            "fields": "userEnteredFormat"}},
-        # подшапка до/спп/кошелёк
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
-            "startColumnIndex": 1, "endColumnIndex": 4},
-            "cell": {"userEnteredFormat": {"backgroundColor": GREY, "horizontalAlignment": "CENTER",
-                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
-            "fields": "userEnteredFormat"}},
-        # значения — по центру
-        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": last,
-            "startColumnIndex": 1, "endColumnIndex": 4},
-            "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
-            "fields": "userEnteredFormat"}},
-        # ширина трёх столбцов
-        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
-            "startIndex": 1, "endIndex": 4}, "properties": {"pixelSize": 82}, "fields": "pixelSize"}},
-        # рамки нового блока B1:D(last)
-        {"updateBorders": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": last,
-            "startColumnIndex": 1, "endColumnIndex": 4},
-            "top": {"style": "SOLID", "color": LINE}, "bottom": {"style": "SOLID", "color": LINE},
-            "left": {"style": "SOLID", "color": LINE}, "right": {"style": "SOLID", "color": LINE},
-            "innerHorizontal": {"style": "SOLID", "color": LINE},
-            "innerVertical": {"style": "SOLID", "color": LINE}}},
-    ]})
+    ws.update([[date]], "C1", value_input_option="RAW")
+    ws.update([SUBHEAD], "C2")
+    vals = [list(data.get(nm, ("", "", ""))) for nm in names]
+    ws.update(vals, f"C3:E{last_row}", value_input_option="USER_ENTERED")
+    _fmt_date_block(ws, sid, last_row)
 
 
 def _alert(msg):
@@ -286,7 +271,7 @@ def run():
             push_history_column(sh, data, now)
             print(f"[prices] снимок {w} артик.; в историю добавлен столбец {now:%d.%m.%Y}", flush=True)
         elif run_label == "13:00":
-            print(f"[prices] снимок {w} артик.; история на ПАУЗЕ (жду финальный дизайн)", flush=True)
+            print(f"[prices] снимок {w} артик.; история на ПАУЗЕ (PRICES_HIST_ENABLED!=1)", flush=True)
         else:
             print(f"[prices] снимок {w} артик.; 07:00 — историю не трогаю", flush=True)
     except Exception as e:
