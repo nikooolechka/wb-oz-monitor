@@ -35,7 +35,9 @@ DRY = os.environ.get("DRY") == "1"
 ALLOWED_MISS = 2
 SHEET_ID = os.environ.get("PRICES_SHEET_ID", "").strip()
 SNAP_TAB = os.environ.get("PRICES_SNAPSHOT_TAB", "Лист1")
-HIST_TAB = os.environ.get("PRICES_HISTORY_TAB", "история")
+HIST_TAB = os.environ.get("PRICES_HISTORY_TAB", "история WB")
+# запись истории включается только когда формат подогнан под финальный дизайн владельца
+HIST_ENABLED = os.environ.get("PRICES_HIST_ENABLED", "") == "1"
 
 MP_TOKEN = os.environ.get("MPSTATS_TOKEN", "").strip()
 WB_TOKEN = os.environ.get("WB_TOKEN", "").strip()
@@ -280,9 +282,11 @@ def run():
     try:
         sh = _open()
         w = write_snapshot(sh, data)
-        if run_label == "13:00":
+        if run_label == "13:00" and HIST_ENABLED:
             push_history_column(sh, data, now)
             print(f"[prices] снимок {w} артик.; в историю добавлен столбец {now:%d.%m.%Y}", flush=True)
+        elif run_label == "13:00":
+            print(f"[prices] снимок {w} артик.; история на ПАУЗЕ (жду финальный дизайн)", flush=True)
         else:
             print(f"[prices] снимок {w} артик.; 07:00 — историю не трогаю", flush=True)
     except Exception as e:
