@@ -27,28 +27,24 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Поднять xray (прокси через Happ для Ozon composer)
-        env:
-          XRAY_TROJAN_JSON: ${{ secrets.XRAY_TROJAN_JSON }}
-        run: |
-          if [ -z "$XRAY_TROJAN_JSON" ]; then echo "нет XRAY_TROJAN_JSON — Ozon composer пропустится"; exit 0; fi
-          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
-          unzip -o -q xray.zip xray || { echo "xray не скачался"; exit 0; }
-          printf '%s' "$XRAY_TROJAN_JSON" > xray_config.json
-          chmod +x xray && ./xray run -c xray_config.json > xray.log 2>&1 &
-          sleep 6
-          curl -s --max-time 20 --socks5 127.0.0.1:10808 https://api.ipify.org && echo " <- IP через прокси" || echo "прокси не поднялся (Ozon composer пропустится, WB не пострадает)"
-      - name: Сбор и запись витринных цен WB
+      - name: Прокси (Happ failover) + сбор цен WB/Ozon
         env:
           OZ_PROXY: "socks5://127.0.0.1:10808"
+          HAPP_SUB_URL: ${{ secrets.HAPP_SUB_URL }}
+          HAPP_HWID: ${{ secrets.HAPP_HWID }}
           MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
           WB_TOKEN: ${{ secrets.WB_TOKEN }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
           PRICES_HIST_ENABLED: ${{ secrets.PRICES_HIST_ENABLED }}
+          PRICES_OZ_ENABLED: ${{ secrets.PRICES_OZ_ENABLED }}
           OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
           OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY: ${{ github.event.inputs.dry }}
-        run: python wb_prices.py
+        run: |
+          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+          unzip -o -q xray.zip xray && chmod +x xray || echo "xray скачать не удалось (Ozon composer пропустится)"
+          python3 setup_oz_proxy.py || echo "Ozon-прокси не поднялся — Ozon пропустится, WB не пострадает"
+          python wb_prices.py
