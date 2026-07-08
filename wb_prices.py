@@ -421,16 +421,13 @@ def run():
             ozc = write_oz(sh, oz_data)
             gotoz = sum(1 for v in oz_data.values() if v[1] is not None)
             print(f"[prices] Ozon: записано ячеек {ozc}; с витриной {gotoz}/{len(oz_data)}", flush=True)
-            if oz_data and gotoz == 0:
-                _alert(f"⚠️ <b>Цены Ozon: витрина не отдалась ({gotoz}/{len(oz_data)}).</b>\n"
-                       f"Прогон {run_label}. Composer заблокировал IP прокси — "
-                       f"цена с картой/банками НЕ обновлена (текущая цена из кабинета записана).")
+            # Алерт в канал НЕ шлём каждый прогон (спам). Провал виден в логах;
+            # смена-состояния-алерт будет в boostik-версии. Composer — временно, до перехода на boostik.
             if run_label == "13:00" and HIST_ENABLED:
                 push_history_column(sh, oz_data, now, tab=OZ_HIST_TAB, subhead=OZ_SUB)
                 print(f"[prices] Ozon: столбец истории {now:%d.%m.%Y}", flush=True)
         except Exception as e:
             print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
-            _alert(f"⚠️ <b>Цены Ozon: сбой сбора.</b>\nПрогон {run_label}. {str(e)[:200]}")
 
     if len(misses) > ALLOWED_MISS:
         _alert(f"⚠️ <b>Цены WB: собрано только {got}/{len(data)}.</b>\n"
