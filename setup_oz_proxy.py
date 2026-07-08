@@ -20,7 +20,8 @@ import urllib.request
 SUB = os.environ.get("HAPP_SUB_URL", "").strip()
 HWID = os.environ.get("HAPP_HWID", "").strip()
 PORT = 10808
-MAX_TRY = 15   # ограничиваем время: обычно рабочий находится в первых серверах
+MAX_TRY = 25   # перебираем ВСЕ серверы: IP, флагнутые у Ozon, встречаются часто
+OZ_CANARY = "https://www.ozon.ru/api/composer-api.bx/page/json/v2?url=%2F"
 
 
 def _ctx():
@@ -54,13 +55,21 @@ def fetch_servers():
 
 
 def _test():
+    """Сервер годен, ТОЛЬКО если Ozon composer реально отдаёт ему JSON
+    (а не антибот-заглушку). Проверяем ту самую задачу, ради которой прокси, —
+    иначе туннель «жив», но Ozon режет IP, и все цены падают в 0."""
     try:
         from curl_cffi import requests as cr
         s = cr.Session(impersonate="chrome")
         s.proxies = {"http": "socks5://127.0.0.1:%d" % PORT, "https": "socks5://127.0.0.1:%d" % PORT}
-        r = s.get("https://api.ipify.org", timeout=15)
-        if r.status_code == 200 and r.text.strip():
-            return r.text.strip()
+        r = s.get(OZ_CANARY, timeout=25)
+        j = json.loads(r.text)            # антибот вернёт HTML → тут исключение → сервер отбракован
+        if isinstance(j, dict) and j.get("widgetStates"):
+            try:
+                ip = s.get("https://api.ipify.org", timeout=10).text.strip()
+            except Exception:
+                ip = "?"
+            return ip
     except Exception:
         return None
     return None
