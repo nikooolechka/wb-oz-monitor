@@ -198,7 +198,12 @@ def main():
     alerted = node.get("alerted", False)
     initialized = node.get("initialized", False)
 
-    found = wb_mold() + oz_mold()
+    # Ozon отключён (решение владельца 2026-07-09): из облака Azure-IP режется антиботом,
+    # бесплатного обхода нет → монитор WB-only. Код oz_mold сохранён; включается флагом
+    # PLESEN_OZON=1 (если появится резидентный/РФ egress — VPS/Oracle).
+    found = wb_mold()
+    if os.environ.get("PLESEN_OZON") == "1":
+        found += oz_mold()
     new = [f for f in found if f["id"] not in seen]
     for f in new:
         seen.add(f["id"])
