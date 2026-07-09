@@ -258,6 +258,17 @@ def write_snapshot(sh, data):
     return written
 
 
+# ---------- штамп для сторожа (примечание к заголовку, в таблице не видно) ----------
+def _stamp_note(ws, col0, text):
+    try:
+        ws.spreadsheet.batch_update({"requests": [{"updateCells": {
+            "range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": col0, "endColumnIndex": col0 + 1},
+            "rows": [{"values": [{"note": text}]}], "fields": "note"}}]})
+    except Exception:
+        pass
+
+
 # ---------- история ----------
 def _article_rows(ws):
     """Имена артикулов из колонки A начиная со строки 3 (без хвостовых пустых)."""
@@ -404,6 +415,7 @@ def run():
 
     try:
         w = write_snapshot(sh, data)
+        _stamp_note(l1, 1, f"ВБ обновлено {now:%Y-%m-%d %H:%M} (снимок {w})")  # B1 — сторож читает
         if run_label == "13:00" and HIST_ENABLED:
             push_history_column(sh, data, now)
             print(f"[prices] WB: снимок {w}; столбец истории {now:%d.%m.%Y}", flush=True)
