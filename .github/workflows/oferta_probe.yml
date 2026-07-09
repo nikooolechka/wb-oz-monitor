@@ -1,0 +1,25 @@
+name: Проба Ozon-оферты через VPN (разовая)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: xray(Happ) + проба оферты
+        env:
+          OZ_PROXY: "socks5://127.0.0.1:10808"
+          HAPP_SUB_URL: ${{ secrets.HAPP_SUB_URL }}
+          HAPP_HWID: ${{ secrets.HAPP_HWID }}
+        run: |
+          curl -sL -o xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+          unzip -o -q xray.zip xray && chmod +x xray
+          python3 setup_oz_proxy.py || echo "прокси не поднялся — проба пойдёт напрямую"
+          python3 oferta_probe.py
