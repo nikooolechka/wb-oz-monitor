@@ -209,6 +209,60 @@ def write_oz(sh, data):
     return len(reqs)
 
 
+def _oz_note_h1():
+    """Примечание H1 Лист1 — штамп Озона (для проверки свежести перед историей)."""
+    try:
+        info = json.loads(os.environ["GSHEETS_SA_JSON"])
+        cred = Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        from googleapiclient.discovery import build as _build
+        svc = _build("sheets", "v4", credentials=cred, cache_discovery=False)
+        res = svc.spreadsheets().get(spreadsheetId=SHEET_ID, ranges=["Лист1!H1"],
+                                     fields="sheets.data.rowData.values.note").execute()
+        return res["sheets"][0]["data"][0]["rowData"][0]["values"][0].get("note", "")
+    except Exception:
+        return ""
+
+
+def oz_from_sheet(sh):
+    """Данные Озона для истории — из Лист1 (их пишет удалённый комп под логином):
+    {name: (текущая, банки, карта)}. «нет в наличии» сохраняем строкой."""
+    ws = sh.worksheet(SNAP_TAB)
+    grid = ws.get("H1:L200")
+    if not grid:
+        return {}
+    hdr = grid[0]
+    idx = {}
+    for j, h in enumerate(hdr):
+        t = (h or "").strip()
+        if t == OZ_HDR["J"]:
+            idx["t"] = j
+        elif t == OZ_HDR["K"]:
+            idx["b"] = j
+        elif t == OZ_HDR["L"]:
+            idx["c"] = j
+
+    def conv(v):
+        v = (v or "").strip()
+        if v == "":
+            return None
+        if "наличи" in v.lower():
+            return "нет в наличии"
+        d = re.sub(r"[^\d]", "", v)
+        return int(d) if d else None
+
+    out = {}
+    for row in grid[1:]:
+        name = (row[0].strip() if row and row[0] else "")
+        if not name or name in EXCLUDE or name == "озон":
+            continue
+        def cell(k):
+            j = idx.get(k)
+            return row[j] if (j is not None and j < len(row)) else ""
+        out[name] = (conv(cell("t")), conv(cell("b")), conv(cell("c")))
+    return out
+
+
 def collect(l1_names):
     """Отслеживаем РОВНО артикулы из Лист1 (колонка B, WB-блок) — контролируемый
     владельцем список. SKU резолвим авто из кабинета по vendorCode. Новый артикул,
@@ -426,23 +480,21 @@ def run():
         _alert(f"⚠️ <b>Цены WB: ошибка записи.</b>\nПрогон {run_label}. {str(e)[:200]}")
         raise
 
-    # ---- Ozon (Лист1-driven, composer через прокси; не роняет WB-часть) ----
-    if OZ_CID and OZ_KEY and OZ_ENABLED:
+    # ---- Ozon: цены Лист1 пишет удалённый комп (под логином). Здесь только ИСТОРИЯ OZ —
+    #      той же логикой, что ВБ (push_history_column), но данные берём из Лист1 (комп),
+    #      и только если Лист1 сегодня свежий (штамп H1 == сегодня, не LOGOUT). ----
+    if run_label == "13:00" and HIST_ENABLED:
         try:
-            oz_names = {(v or "").strip() for v in l1.col_values(8)[1:]
-                        if (v or "").strip() and (v or "").strip() not in EXCLUDE
-                        and (v or "").strip() != "озон"}
-            oz_data = oz_full_prices(oz_names)
-            ozc = write_oz(sh, oz_data)
-            gotoz = sum(1 for v in oz_data.values() if v[1] is not None)
-            print(f"[prices] Ozon: записано ячеек {ozc}; с витриной {gotoz}/{len(oz_data)}", flush=True)
-            # Алерт в канал НЕ шлём каждый прогон (спам). Провал виден в логах;
-            # смена-состояния-алерт будет в boostik-версии. Composer — временно, до перехода на boostik.
-            if run_label == "13:00" and HIST_ENABLED:
+            note = _oz_note_h1()
+            today_s = now.strftime("%Y-%m-%d")
+            if (today_s in note) and ("LOGOUT" not in note):
+                oz_data = oz_from_sheet(sh)
                 push_history_column(sh, oz_data, now, tab=OZ_HIST_TAB, subhead=OZ_SUB)
-                print(f"[prices] Ozon: столбец истории {now:%d.%m.%Y}", flush=True)
+                print(f"[prices] Ozon: столбец истории {now:%d.%m.%Y} из Лист1 (данные компа)", flush=True)
+            else:
+                print(f"[prices] Ozon: Лист1 не свеж сегодня (H1={note!r}) — историю не пишу", flush=True)
         except Exception as e:
-            print(f"[prices] Ozon пропущен (не критично): {e}", flush=True)
+            print(f"[prices] Ozon история пропущена (не критично): {e}", flush=True)
 
     if len(misses) > ALLOWED_MISS:
         _alert(f"⚠️ <b>Цены WB: собрано только {got}/{len(data)}.</b>\n"
