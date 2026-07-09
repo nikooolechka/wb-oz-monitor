@@ -1,0 +1,42 @@
+name: Сторож цен (WB/ОЗОН/ЯМ)
+
+on:
+  schedule:
+    - cron: "45 4 * * *"    # 07:45 МСК — ранняя проверка + самопочинка WB
+    - cron: "45 10 * * *"   # 13:45 МСК — финальная проверка + алерт в канал
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # коммитим state дедупа
+  actions: write    # самопочинка: re-dispatch wb_prices
+
+concurrency:
+  group: price-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install google-auth google-api-python-client
+      - name: watchdog
+        env:
+          PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_PAT: ${{ secrets.PAT_SECRETS_WRITE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python price_watchdog.py
+      - name: commit state
+        run: |
+          git config user.name "asfarm-bot"
+          git config user.email "bot@asfarm.local"
+          git add data/price_watchdog_state.json 2>/dev/null || true
+          git commit -m "watchdog: state" 2>/dev/null || true
+          git push 2>/dev/null || true
