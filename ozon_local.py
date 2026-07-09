@@ -226,13 +226,13 @@ def main() -> None:
     # ОДНО сообщение в канал за прогон
     if not changed:
         _send(
-            "🔵 Ozon проверен — изменений в договоре не обнаружено ✅\n"
+            "🔵 <b>Ozon проверен</b> — изменений в договоре не обнаружено ✅\n"
             f"{now_msk_str()}"
         )
         print("[OK] Ozon: без изменений (статус отправлен)", flush=True)
         return
 
-    lines = ["🔵 Ozon — <b>обнаружены изменения в документах:</b>", ""]
+    lines = ["🔵 <b>Ozon — обнаружены</b> изменения в документах:", ""]
     for title, url, summary in changed:
         lines.append(f"<b>{_html.escape(title)}</b>")
         lines.append(_html.escape(summary))
