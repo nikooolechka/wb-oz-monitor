@@ -59,7 +59,8 @@ MONTHS_RU = {1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕ
              7: "ИЮЛЬ", 8: "АВГУСТ", 9: "СЕНТЯБРЬ", 10: "ОКТЯБРЬ", 11: "НОЯБРЬ", 12: "ДЕКАБРЬ"}
 
 # стиль владельца (считан из листа)
-HEADER_BG = {"red": 0.6, "green": 0.0, "blue": 1.0}
+HEADER_BG = {"red": 0.6, "green": 0.0, "blue": 1.0}      # ВБ: фиолетовый
+OZ_HEADER_BG = {"red": 0.0, "green": 0.0, "blue": 1.0}   # Озон: синий
 GRAYM_BG = {"red": 0.7176471, "green": 0.7176471, "blue": 0.7176471}
 SUB_BG = {"red": 0.9294118, "green": 0.9294118, "blue": 0.9294118}
 ART_BG = {"red": 0.8470588, "green": 0.9098039, "blue": 0.9568627}
@@ -284,14 +285,15 @@ def _setup_month_col(ws, sid, label, last_row):
     ]})
 
 
-def _fmt_date_block(ws, sid, last_row):
-    """Оформляет блок свежей даты — он всегда в столбцах C:E (индексы 2..4)."""
+def _fmt_date_block(ws, sid, last_row, header_bg=HEADER_BG):
+    """Оформляет блок свежей даты — он всегда в столбцах C:E (индексы 2..4).
+    header_bg — цвет шапки даты (ВБ фиолетовый / Озон синий), един для листа."""
     ws.spreadsheet.batch_update({"requests": [
         {"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
             "startColumnIndex": 2, "endColumnIndex": 5}, "mergeType": "MERGE_ALL"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
             "startColumnIndex": 2, "endColumnIndex": 5},
-            "cell": {"userEnteredFormat": {"backgroundColor": HEADER_BG, "horizontalAlignment": "CENTER",
+            "cell": {"userEnteredFormat": {"backgroundColor": header_bg, "horizontalAlignment": "CENTER",
                 "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "foregroundColor": WHITE}}},
             "fields": "userEnteredFormat"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
@@ -367,7 +369,8 @@ def push_history_column(sh, data, now, tab=None, subhead=None):
     ws.update([subhead], "C2")
     vals = [list(data.get(nm, ("", "", ""))) for nm in names]
     ws.update(vals, f"C3:E{last_row}", value_input_option="USER_ENTERED")
-    _fmt_date_block(ws, sid, last_row)
+    hb = OZ_HEADER_BG if (tab or HIST_TAB) == OZ_HIST_TAB else HEADER_BG
+    _fmt_date_block(ws, sid, last_row, header_bg=hb)
 
 
 def _alert(msg):
@@ -436,3 +439,4 @@ def run():
 
 if __name__ == "__main__":
     run()
+
