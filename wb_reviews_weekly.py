@@ -65,38 +65,47 @@ def archive_append(rows):
         print("архив: ошибка", str(e)[:150]); return -1
 
 
+import re
+# категории причин негатива → чистая короткая формулировка (детерминированно, без LLM)
+_CATS = [
+    (re.compile(r"развод|не очищ|не чист|размаз|мут[ьи]|пелен|плёнк|пленк|не отт[ие]р"), "разводы, плохо очищает"),
+    (re.compile(r"запах|вонюч|вон[яеё]|отдушк|химоз|аромат.*непри"), "резкий запах"),
+    (re.compile(r"нет.*эффект|без эффект|ноль эффект|никак.*эффект|не работа|прост.*вод|сладк.*вод|ни о ч[её]м|бестолк|беспол"), "нет эффекта"),
+    (re.compile(r"аллерг|покрасн|красн.*пятн|пятн.*рот|ожог|раздраж|сыпь|реакц"), "покраснение/аллергия у ребёнка"),
+    (re.compile(r"плесен|плеснев|гнил|протух|тухл"), "плесень"),
+    (re.compile(r"горьк|приторн|тошнот|рвот|невкусн|мятн.*непри|вкус.*ужас|ужас.*вкус"), "плохой вкус"),
+    (re.compile(r"размер|больш|огромн|маленьк|резать|мелк"), "неудобный размер"),
+    (re.compile(r"упаковк|вскрыт|грязн|промок|прокол|недовлож|порош|мят[аы]|повреж"), "брак упаковки"),
+    (re.compile(r"срок годн|просроч|перебит.*дат|дата.*произв"), "вопрос к сроку годности"),
+]
+
+
 def cluster_reasons(negs):
     if not negs:
         return []
     by = defaultdict(list)
     for f in negs:
         by[f["article"]].append(f)
-
-    def fallback():
-        out = []
-        for art, items in sorted(by.items(), key=lambda x: -len(x[1])):
-            snip = next((i["cons"] or i["text"] for i in items if (i["cons"] or i["text"])), "")
-            snip = snip.replace("\n", " ")[:60]
-            out.append(f"• {snip or 'негатив'} — <b>{art}</b> ({len(items)})")
-        return out[:5]
-
-    try:
-        import anthropic
-        payload = []
-        for art, items in by.items():
-            texts = [((i["cons"] + " " + i["text"]).strip())[:200] for i in items]
-            payload.append(f"{art} ({len(items)}): " + " || ".join(t for t in texts if t))
-        prompt = ("Ниже негативные отзывы WB за неделю, сгруппированы по артикулу. "
-                  "Для каждого артикула выдели КОРОТКУЮ (3–6 слов) главную причину негатива. "
-                  "Верни ТОЛЬКО строки формата: • <причина> — <b>АРТИКУЛ</b> (N)\n"
-                  "Максимум 5 строк, по убыванию N. Без вступления и пояснений.\n\n" + "\n".join(payload))
-        cl = anthropic.Anthropic()
-        m = cl.messages.create(model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
-                               max_tokens=400, messages=[{"role": "user", "content": prompt}])
-        lines = [l.strip() for l in m.content[0].text.splitlines() if l.strip().startswith("•")]
-        return lines[:5] if lines else fallback()
-    except Exception as e:
-        print("LLM причины -> фолбэк:", str(e)[:100]); return fallback()
+    out = []
+    for art, items in sorted(by.items(), key=lambda x: -len(x[1])):
+        cats = defaultdict(int)
+        for i in items:
+            t = (i["pros"] + " " + i["cons"] + " " + i["text"]).lower()
+            for rx, label in _CATS:
+                if rx.search(t):
+                    cats[label] += 1
+        if cats:
+            top = [lbl for lbl, _ in sorted(cats.items(), key=lambda x: -x[1])[:2]]
+            reason = " + ".join(top)
+        else:
+            # ни одна категория — берём короткий сниппет по границе слова
+            snip = next((i["cons"] or i["text"] or i["pros"] for i in items if (i["cons"] or i["text"] or i["pros"])), "")
+            snip = " ".join(snip.replace("\n", " ").split())
+            if len(snip) > 55:
+                snip = snip[:55].rsplit(" ", 1)[0] + "…"
+            reason = snip or "негатив"
+        out.append(f"• {reason} — <b>{art}</b> ({len(items)})")
+    return out[:5]
 
 
 def main():
