@@ -22,6 +22,7 @@ import os
 import re
 import math
 import json
+import time
 import tempfile
 
 import requests
@@ -105,14 +106,29 @@ def load_etalon():
 
 
 # ---------- карточки Ozon ----------
+def _attr_post(body):
+    """POST атрибутов с ретраем на разовые сбои Ozon (429/5xx/таймаут) — иначе один
+    блип роняет весь прогон (так упало 09.07)."""
+    last_err = None
+    for attempt in range(4):
+        try:
+            r = requests.post(BASE + "/v4/product/info/attributes", headers=HEAD,
+                              json=body, timeout=90)
+            if r.status_code in (429, 500, 502, 503, 504):
+                last_err = f"HTTP {r.status_code}"
+                time.sleep(5 * (attempt + 1)); continue
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException as e:
+            last_err = str(e)[:100]
+            time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"attributes: не удалось после ретраев ({last_err})")
+
+
 def fetch_cards():
     out, last = {}, ""
     while True:
-        r = requests.post(BASE + "/v4/product/info/attributes", headers=HEAD,
-                          json={"filter": {"visibility": "VISIBLE"}, "limit": 100, "last_id": last},
-                          timeout=60)
-        r.raise_for_status()
-        d = r.json()
+        d = _attr_post({"filter": {"visibility": "VISIBLE"}, "limit": 100, "last_id": last})
         items = d.get("result") or []
         for it in items:
             off = (it.get("offer_id") or "").strip()
