@@ -2,6 +2,10 @@ name: Проверка оферт WB+Ozon
 
 on:
   workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = тихая проверка (в канал НЕ писать, только лог)"
+        default: ""
   schedule:
     - cron: "0 8 * * *"   # ежедневно 11:00 МСК (оферты/договор — важно, проверяем каждый день)
 
@@ -39,4 +43,5 @@ jobs:
           GITHUB_REPO: nikooolechka/wb-oz-monitor
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry }}
         run: python ozon_local.py
