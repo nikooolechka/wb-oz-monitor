@@ -1,0 +1,38 @@
+name: Еженедельная сводка отзывов WB (пн 15:00 МСК → канал)
+
+on:
+  schedule:
+    - cron: "0 12 * * 1"     # понедельник 12:00 UTC = 15:00 МСК
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "DRY — посчитать и показать в логе, но НЕ слать в канал"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wb_reviews_weekly
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Сводка отзывов WB за неделю
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DRY: ${{ inputs.dry && '1' || '' }}
+        run: python wb_reviews_weekly.py
