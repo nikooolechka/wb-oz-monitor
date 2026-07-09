@@ -37,6 +37,6 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: nikooolechka/wb-oz-monitor
-          SCRAPFLY_KEY: ${{ secrets.SCRAPFLY_KEY }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          PRICES_SHEET_ID: ${{ secrets.PRICES_SHEET_ID }}
         run: python ozon_local.py
-
