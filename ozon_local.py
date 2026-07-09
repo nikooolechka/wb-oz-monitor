@@ -33,7 +33,7 @@ HOME_DIR = os.path.expanduser("~/.wb-oz-monitor")
 ENV_FILE = os.path.join(HOME_DIR, ".env")
 SHARED_PATH = "data/ozon_shared.json"
 MSK = timezone(timedelta(hours=3))
-CHECK_EVERY_DAYS = 5
+CHECK_EVERY_DAYS = 0   # ежедневно, как ВБ-оферта (тексты снимает удалённый комп, Scrapfly не тратим)
 
 OZON_DOCS = [
     {"key": "standard-terms", "title": "Договор поставки",
@@ -75,27 +75,23 @@ def _days_since(date_str: str) -> int:
         return 10 ** 6
 
 
-def fetch_doc(url: str) -> str:
-    """Тянет документ Ozon через Scrapfly (ASP+render_js+RU), возвращает текст
-    блока <article> (без бокового меню). Работает из облака, без Мака."""
-    import re
-    import requests
-    from urllib.parse import quote
-    key = os.environ.get("SCRAPFLY_KEY", "").strip()
-    api = ("https://api.scrapfly.io/scrape?key=" + key
-           + "&url=" + quote(url, safe="")
-           + "&asp=true&render_js=true&country=ru")
-    r = requests.get(api, timeout=180)
-    r.raise_for_status()
-    html = ((r.json().get("result") or {}).get("content") or "")
-    m = re.search(r"(?is)<article[^>]*>(.*?)</article>", html)
-    chunk = m.group(1) if m else html
-    sys.path.insert(0, HERE)
-    from sources import _strip_html
-    text = _strip_html(chunk)
-    if len(text) < 1000:
-        raise RuntimeError("Scrapfly вернул не тот контент (документ не найден)")
-    return text
+def load_offers_from_sheet() -> dict:
+    """Тексты оферт, снятые удалённым компом (настоящий Chrome, РФ-IP) — из вкладки
+    ozon_offers таблицы «цены АС фарм». {key: text}. Scrapfly больше не нужен."""
+    from google.oauth2.service_account import Credentials
+    from googleapiclient.discovery import build as _build
+    info = json.loads(os.environ["GSHEETS_SA_JSON"])
+    sid = os.environ["PRICES_SHEET_ID"]
+    cred = Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+    svc = _build("sheets", "v4", credentials=cred, cache_discovery=False)
+    vals = svc.spreadsheets().values().get(
+        spreadsheetId=sid, range="ozon_offers!A2:D50").execute().get("values", [])
+    out = {}
+    for r in vals:
+        if r and r[0].strip() and len(r) >= 4:
+            out[r[0].strip()] = r[3]
+    return out
 
 
 def _gh_headers() -> dict:
@@ -169,14 +165,19 @@ def main() -> None:
         print(f"[SKIP] Ozon: последняя проверка {last}, ещё не прошло {CHECK_EVERY_DAYS} дн — пропуск", flush=True)
         return
 
+    try:
+        offers = load_offers_from_sheet()
+    except Exception as e:
+        print(f"[WARN] не прочитал вкладку ozon_offers: {e}", flush=True)
+        offers = {}
+
     changed = []       # (title, url, summary)
     fetched_any = False
     for d in OZON_DOCS:
-        try:
-            raw = fetch_doc(d["url"])
-        except Exception as e:
-            print(f"[WARN] {d['key']}: {e}", flush=True)
-            continue  # эталон этого дока не трогаем, попробуем в следующий раз
+        raw = offers.get(d["key"])
+        if not raw or len(raw) < 800:
+            print(f"[WARN] {d['key']}: нет свежего текста от компа — пропуск", flush=True)
+            continue  # эталон этого дока не трогаем
         fetched_any = True
         text = normalize(raw)
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -237,3 +238,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
