@@ -149,6 +149,13 @@ def main() -> None:
     import notify
     import html as _html
 
+    DRY = os.environ.get("DRY_RUN") == "1"
+    def _send(msg):
+        if DRY:
+            print("[DRY] в канал НЕ отправлено. Текст был бы:\n" + msg, flush=True)
+        else:
+            notify.send(msg)
+
     has_llm = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
     try:
@@ -218,7 +225,7 @@ def main() -> None:
 
     # ОДНО сообщение в канал за прогон
     if not changed:
-        notify.send(
+        _send(
             "🔵 Ozon проверен — изменений в договоре не обнаружено ✅\n"
             f"{now_msk_str()}"
         )
@@ -232,7 +239,7 @@ def main() -> None:
         lines.append(f"🔗 {url}")
         lines.append("")
     lines.append(now_msk_str())
-    notify.send("\n".join(lines).strip())
+    _send("\n".join(lines).strip())
     print(f"[ALERT] Ozon: отправлено ({len(changed)} докум. изменилось)", flush=True)
 
 
