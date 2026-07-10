@@ -33,7 +33,7 @@ HOME_DIR = os.path.expanduser("~/.wb-oz-monitor")
 ENV_FILE = os.path.join(HOME_DIR, ".env")
 SHARED_PATH = "data/ozon_shared.json"
 MSK = timezone(timedelta(hours=3))
-CHECK_EVERY_DAYS = 0   # ежедневно, как ВБ-оферта (тексты снимает удалённый комп, Scrapfly не тратим)
+CHECK_EVERY_DAYS = 1   # раз в день (как ВБ): второй прогон в те же сутки пропускается — без дубля-спама
 
 OZON_DOCS = [
     {"key": "standard-terms", "title": "Договор поставки",
