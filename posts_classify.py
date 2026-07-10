@@ -13,7 +13,9 @@ import os
 import re
 import ssl
 import json
+import time
 import urllib.request
+import urllib.error
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 GEMINI_KEY = os.environ.get("GEMINI_KEY", "").strip()
@@ -90,11 +92,21 @@ def _gemini(user: str) -> str:
         "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
                              "responseMimeType": "application/json"},
     }
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
-                                 headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=45, context=_CTX) as r:
-        d = json.loads(r.read().decode())
-    return d["candidates"][0]["content"]["parts"][0]["text"]
+    data = json.dumps(body).encode("utf-8")
+    last = None
+    for attempt in range(4):  # ретрай на минутный лимит (429) / временную недоступность (503)
+        req = urllib.request.Request(url, data=data, headers={"content-type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=45, context=_CTX) as r:
+                d = json.loads(r.read().decode())
+            return d["candidates"][0]["content"]["parts"][0]["text"]
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (429, 503) and attempt < 3:
+                time.sleep(20 * (attempt + 1))  # 20/40/60с — переждать минутное окно
+                continue
+            raise
+    raise last
 
 
 def classify(channel: str, text: str, client=None) -> dict:
