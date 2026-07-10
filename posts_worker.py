@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 import tempfile
 import traceback
 from datetime import datetime, timezone, timedelta
@@ -32,6 +33,7 @@ STATE_PATH = os.environ.get("POSTS_STATE_PATH", "data/posts_state.json")
 WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))
 PREVIEW = os.environ.get("POSTS_PREVIEW") == "1"
 MSK = timezone(timedelta(hours=3))
+PACE_SEC = float(os.environ.get("POSTS_PACE_SEC", "4.5"))  # раздаём запросы к Gemini под минутный лимит free-тарифа
 NOTHING_MSG = "Прогнал все каналы, сегодня ничего полезного🫡"
 
 _ORDER = ["правила", "связка", "фишка", "кейс", "данные", "инструмент", "ресурс"]
@@ -156,6 +158,7 @@ def run_once() -> None:
         print(f"  [{tag}] @{p.channel}/{p.post_id} {res.get('headline','')}", flush=True)
         if res.get("keep"):
             entries.append({"post": p, "res": res})
+        time.sleep(PACE_SEC)  # не бомбим Gemini пачкой → не ловим 429 по минутному лимиту
 
     # МАССОВЫЙ СБОЙ МОЗГА: посты были, но НИ ОДИН не разобран → поломка, не «пусто».
     if new_posts and ok_cnt == 0 and err_cnt > 0:
