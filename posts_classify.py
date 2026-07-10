@@ -1,22 +1,30 @@
-"""Оценка поста через Claude Haiku по профилю интересов АС Фарм.
+"""Оценка поста по профилю интересов АС Фарм — мозг БЕСПЛАТНЫЙ (Gemini),
+с фолбэком на Anthropic. Раньше был только Claude Haiku (платные кредиты) —
+2026-07-10 кредиты кончились и дайджест молча слал «ничего полезного»; перевели
+на бесплатный Gemini, чтобы не зависеть от предоплаты. classify() при сбое мозга
+БРОСАЕТ исключение (не глотает) — чтобы posts_worker увидел массовый сбой и
+не выдал ложное «ничего полезного».
 
-Постов мало (~13-14/день со всех каналов), поэтому гоним ИИ по КАЖДОМУ —
-это копейки. Не фильтр по ключевым словам: ключи ловят слово «оферта», но
-пропускают неочевидную фишку. ИИ читает смысл и решает — есть рабочая
-идея/связка/фишка/изменение/ресурс или это пустая болтовня.
-
-Ссылки в дайджест берём ИЗ РАСПАРСЕННОГО ПОСТА (posts_sources), а НЕ из ответа
-модели — чтобы исключить выдуманные ссылки.
+Ссылки берём из распарсенного поста (posts_sources), не из ответа модели.
 """
 from __future__ import annotations
 
 import os
 import re
+import ssl
 import json
-
-import anthropic
+import urllib.request
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
+GEMINI_KEY = os.environ.get("GEMINI_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+
+_CTX = ssl.create_default_context()
+try:
+    _CTX.check_hostname = False
+    _CTX.verify_mode = ssl.CERT_NONE  # на маке бывает CERTIFICATE_VERIFY_FAILED; в CI не мешает
+except Exception:
+    pass
 
 # Профиль релевантности — главный конфиг. Правится по результатам калибровки.
 _SYSTEM = """Ты — аналитик-ассистент продавца «АС Фарм» на маркетплейсах. Тебе дают ОДИН пост из Telegram-канала про маркетплейсы. Реши, есть ли в нём что-то реально полезное для нас, и если да — извлеки суть.
@@ -73,17 +81,37 @@ def _extract_json(s: str) -> dict:
         return {"keep": False}
 
 
-def classify(client: "anthropic.Anthropic", channel: str, text: str) -> dict:
-    """Возвращает разбор поста. keep=False — пропустить."""
+def _gemini(user: str) -> str:
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}")
+    body = {
+        "systemInstruction": {"parts": [{"text": _SYSTEM}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
+                             "responseMimeType": "application/json"},
+    }
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                 headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=45, context=_CTX) as r:
+        d = json.loads(r.read().decode())
+    return d["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def classify(channel: str, text: str, client=None) -> dict:
+    """Разбор поста. keep=False — пропустить. При сбое мозга — БРОСАЕТ исключение."""
     if len(text.strip()) < 25:  # совсем короткие (мемы/реакции) не гоняем
         return {"keep": False}
-    msg = client.messages.create(
-        model=MODEL,
-        max_tokens=500,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": f"Канал: @{channel}\n\nПост:\n{text[:6000]}"}],
-    )
-    out = "".join(b.text for b in msg.content if b.type == "text")
+    user = f"Канал: @{channel}\n\nПост:\n{text[:6000]}"
+    if GEMINI_KEY:
+        out = _gemini(user)
+    elif os.environ.get("ANTHROPIC_API_KEY"):
+        import anthropic
+        client = client or anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
+        msg = client.messages.create(model=MODEL, max_tokens=500, system=_SYSTEM,
+                                     messages=[{"role": "user", "content": user}])
+        out = "".join(b.text for b in msg.content if b.type == "text")
+    else:
+        raise RuntimeError("нет мозга классификатора: не задан ни GEMINI_KEY, ни ANTHROPIC_API_KEY")
     res = _extract_json(out)
     res["keep"] = bool(res.get("keep"))
     return res
