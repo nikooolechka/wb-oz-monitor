@@ -26,7 +26,7 @@ GH_TOKEN = os.environ.get("GH_PAT") or os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = "data/price_watchdog_state.json"
 
 # маркет -> индекс столбца (0-based) ячейки-заголовка в строке 1 Лист1
-MARKETS = [("WB", 1), ("ОЗОН", 7), ("ЯМ", 14)]
+MARKETS = [("WB", 1), ("ОЗОН", 7), ("ЯМ", 14), ("ДМ", 20)]
 
 def _svc():
     cred = Credentials.from_service_account_info(
