@@ -1,0 +1,24 @@
+name: Витринные цены Детский Мир
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"    # 07:00 МСК
+    - cron: "0 10 * * *"   # 13:00 МСК
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dm-prices
+  cancel-in-progress: false
+
+jobs:
+  dm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: detmir -> таблица (через прокси /dm/run)
+        run: |
+          resp=$(curl -s --max-time 120 "https://ym-proxy-production.up.railway.app/dm/run?k=${{ secrets.PRICES_PROXY_KEY }}")
+          echo "$resp"
+          echo "$resp" | grep -q '"ok": *true' || { echo "ДМ: прогон не удался"; exit 1; }
