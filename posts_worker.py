@@ -1,18 +1,20 @@
 """Мониторинг ПОСТОВ Telegram-каналов про маркетплейсы → ИИ-дайджест.
 
-Раз в сутки обходит каналы (posts_sources), берёт новые посты (id больше
-сохранённого), прогоняет каждый через Haiku (posts_classify) по профилю
-АС Фарм и собирает дайджест: только то, что прошло порог, с аргументами,
-цифрами и живыми ссылками. БЕЗ лимита числа — выдаёт всё, что прошло.
+Раз в сутки обходит каналы (posts_sources), берёт вчерашние посты, прогоняет
+каждый через классификатор (posts_classify — бесплатный Gemini, фолбэк Anthropic)
+по профилю АС Фарм и собирает дайджест: только то, что прошло порог.
 
-Состояние постов — отдельный файл (data/posts_state.json), чтобы не
-конфликтовать с состоянием оферты (data/state.json).
+Состояние постов — data/posts_state.json.
 
-РЕЖИМ: по умолчанию АВТОПУБЛИКАЦИЯ — дайджест уходит в группу и состояние
-двигается (посты помечаются обработанными). Для ручного превью без отправки —
-POSTS_PREVIEW=1 (печатает в stdout, в группу не шлёт, состояние не трогает).
-Облачный прогон работает автономно (флага нет → публикует); превью для
-доводки запускаем локально с POSTS_PREVIEW=1.
+РЕЖИМ: по умолчанию АВТОПУБЛИКАЦИЯ. POSTS_PREVIEW=1 — превью без отправки.
+
+ЧЕСТНОСТЬ СТАТУСА (важно, правило владельца 2026-07-10): если посты за вчера
+БЫЛИ, но классификатор не смог разобрать НИ ОДНОГО (кончились кредиты / лимит /
+сбой мозга) — это НЕ «ничего полезного». В этом случае шлём fail-loud сообщение
+(один раз в день) и РОНЯЕМ прогон (exit!=0), чтобы воркфлоу стал failure и на
+дашборде карточка автоматически покраснела. Посты при этом НЕ помечаем
+обработанными — разберём в следующий раз. «Ничего полезного» уходит ТОЛЬКО когда
+мозг реально отработал и ничего не прошло порог.
 """
 from __future__ import annotations
 
@@ -22,15 +24,13 @@ import tempfile
 import traceback
 from datetime import datetime, timezone, timedelta
 
-import anthropic
-
 import notify
 import posts_sources as src
 import posts_classify as clf
 
 STATE_PATH = os.environ.get("POSTS_STATE_PATH", "data/posts_state.json")
-WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))  # первый прогон = неделя, далее дедуп по id
-PREVIEW = os.environ.get("POSTS_PREVIEW") == "1"  # превью: не публиковать и не двигать состояние (по умолчанию — автопубликация)
+WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))
+PREVIEW = os.environ.get("POSTS_PREVIEW") == "1"
 MSK = timezone(timedelta(hours=3))
 NOTHING_MSG = "Прогнал все каналы, сегодня ничего полезного🫡"
 
@@ -61,10 +61,8 @@ def _save(state: dict) -> None:
 def collect_new(state: dict) -> tuple[list[src.Post], dict]:
     """Возвращает (новые посты к разбору, обновлённое состояние last_id).
 
-    Дайджест — ВСЕГДА строго за ВЧЕРА (одни завершённые календарные сутки МСК),
-    и для новых каналов тоже — никаких многодневных «периодов»/backfill. Берём
-    посты, у которых дата (МСК) == вчера. Сегодняшние ждут завтрашнего дайджеста.
-    Состояние двигаем только по включённым постам.
+    Дайджест — ВСЕГДА строго за ВЧЕРА (одни завершённые сутки МСК). Состояние
+    двигаем только по включённым постам.
     """
     today = datetime.now(MSK).date()
     yesterday = today - timedelta(days=1)
@@ -78,24 +76,18 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
         if not posts:
             continue
         last_id = state.get(ch)
-        # дедуп: уже виденные посты не берём (для новых каналов last_id нет)
         cand = posts if last_id is None else [p for p in posts if p.post_id > last_id]
-        # ТОЛЬКО вчерашние сутки (МСК) — и для новых каналов тоже
         eligible = [p for p in cand if p.dt.astimezone(MSK).date() == yesterday]
         new_posts.extend(eligible)
         if eligible:
             state[ch] = max(p.post_id for p in eligible)
         elif last_id is not None:
-            state[ch] = last_id  # сегодняшние/будущие посты ждут своего дня
+            state[ch] = last_id
     new_posts.sort(key=lambda p: p.dt)
     return new_posts, state
 
 
 def build_digest(entries: list[dict]) -> list[str]:
-    """Новый вид: заголовок «🗞 Дайджест за DD.MM · N тем» и сразу нумерованные
-    РАЗВОРАЧИВАЮЩИЕСЯ цитаты (<blockquote expandable>) — каждая свёрнута, читатель
-    раскрывает только интересные. Возвращает список сообщений (упаковка по максимуму,
-    цитаты не рвём; потолок Telegram 4096)."""
     dates = sorted({e["post"].dt.astimezone(MSK).date() for e in entries})
     if len(dates) <= 1:
         per = (dates[0] if dates else datetime.now(MSK).date()).strftime("%d.%m")
@@ -134,25 +126,58 @@ def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _fail_cause(err: str) -> str:
+    low = (err or "").lower()
+    if any(k in low for k in ("credit balance", "quota", "resource_exhausted", "429", "too many requests")):
+        return "кончились кредиты / упёрлись в лимит"
+    return "мозг классификатора недоступен"
+
+
 def run_once() -> None:
     state = _load()
+    orig = dict(state)  # снимок ДО мутации — при сбое мозга не теряем посты
     first_run = not state
     new_posts, state = collect_new(state)
     print(f"[INFO] новых постов к разбору: {len(new_posts)}", flush=True)
 
     entries: list[dict] = []
-    if new_posts:
-        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
-        for p in new_posts:
-            try:
-                res = clf.classify(client, p.channel, p.text)
-            except Exception as e:
-                print(f"[WARN] @{p.channel}/{p.post_id}: ошибка разбора: {e}", flush=True)
-                continue
-            tag = "KEEP" if res.get("keep") else "skip"
-            print(f"  [{tag}] @{p.channel}/{p.post_id} {res.get('headline','')}", flush=True)
-            if res.get("keep"):
-                entries.append({"post": p, "res": res})
+    ok_cnt = err_cnt = 0
+    last_err = ""
+    for p in new_posts:
+        try:
+            res = clf.classify(p.channel, p.text)
+            ok_cnt += 1
+        except Exception as e:
+            err_cnt += 1
+            last_err = str(e)
+            print(f"[WARN] @{p.channel}/{p.post_id}: ошибка разбора: {e}", flush=True)
+            continue
+        tag = "KEEP" if res.get("keep") else "skip"
+        print(f"  [{tag}] @{p.channel}/{p.post_id} {res.get('headline','')}", flush=True)
+        if res.get("keep"):
+            entries.append({"post": p, "res": res})
+
+    # МАССОВЫЙ СБОЙ МОЗГА: посты были, но НИ ОДИН не разобран → поломка, не «пусто».
+    if new_posts and ok_cnt == 0 and err_cnt > 0:
+        cause = _fail_cause(last_err)
+        msg = (f"<b>Дайджест не собрался — {cause}.</b>\n"
+               f"Посты за вчера есть ({len(new_posts)} шт), но разобрать не удалось. "
+               f"Николь, зайди пожалуйста в сессию — починим.")
+        today_iso = datetime.now(MSK).date().isoformat()
+        already = orig.get("_brain_fail_date") == today_iso
+        if PREVIEW:
+            print("[PREVIEW] BRAIN FAIL — в группу ушло бы: " + msg, flush=True)
+        else:
+            if not already:
+                notify.send(msg)
+                print("[ALERT] массовый сбой разбора — fail-loud отправлен в группу", flush=True)
+            else:
+                print("[INFO] массовый сбой разбора — уже алертил сегодня, повтор не шлю", flush=True)
+            # сохраняем ТОЛЬКО метку даты сбоя поверх ИСХОДНОГО состояния (посты не двигаем)
+            fail_state = dict(orig)
+            fail_state["_brain_fail_date"] = today_iso
+            _save(fail_state)
+        raise SystemExit("classification wholesale failure: посты есть, разобрать не смогли")
 
     if entries:
         chunks = build_digest(entries)
@@ -169,13 +194,12 @@ def run_once() -> None:
             print("[PREVIEW] пусто — в группу ушло бы: " + NOTHING_MSG, flush=True)
         else:
             notify.send(NOTHING_MSG)
-            print("[INFO] ничего не прошло порог — отправил статус-сообщение в группу", flush=True)
+            print("[INFO] мозг отработал, ничего не прошло порог — статус-сообщение в группу", flush=True)
 
-    # Состояние двигаем (помечаем посты обработанными) ТОЛЬКО при реальной публикации,
-    # иначе превью «съело» бы посты и при публикации их бы уже не было.
     if PREVIEW:
         print("[PREVIEW] состояние НЕ сохранено — превью, посты остаются", flush=True)
     else:
+        state.pop("_brain_fail_date", None)  # успех — снимаем метку сбоя
         _save(state)
         if first_run:
             notify.send(
@@ -187,6 +211,8 @@ def run_once() -> None:
 if __name__ == "__main__":
     try:
         run_once()
+    except SystemExit:
+        raise
     except Exception:
         print("[ERROR] сбой:\n" + traceback.format_exc(), flush=True)
         raise
