@@ -263,6 +263,60 @@ def oz_from_sheet(sh):
     return out
 
 
+def _wb_note_b1():
+    """Примечание B1 Лист1 — штамп ВБ (пишет удалённый комп). Для проверки свежести перед историей."""
+    try:
+        info = json.loads(os.environ["GSHEETS_SA_JSON"])
+        cred = Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        from googleapiclient.discovery import build as _build
+        svc = _build("sheets", "v4", credentials=cred, cache_discovery=False)
+        res = svc.spreadsheets().get(spreadsheetId=SHEET_ID, ranges=["Лист1!B1"],
+                                     fields="sheets.data.rowData.values.note").execute()
+        return res["sheets"][0]["data"][0]["rowData"][0]["values"][0].get("note", "")
+    except Exception:
+        return ""
+
+
+def wb_from_sheet(sh):
+    """Данные ВБ для истории — из Лист1 (их пишет удалённый комп под неличным логином):
+    {name: (до СПП, с СПП, с кошельком)}. «нет в наличии» сохраняем строкой."""
+    ws = sh.worksheet(SNAP_TAB)
+    grid = ws.get("B1:F200")
+    if not grid:
+        return {}
+    hdr = grid[0]
+    idx = {}
+    for j, h in enumerate(hdr):
+        t = (h or "").strip().lower().replace("\n", " ")
+        if t in ("цена до спп", "цена до cпп"):
+            idx["do"] = j
+        elif t in ("цена с спп", "цена с cпп"):
+            idx["s"] = j
+        elif t == "цена с кошельком":
+            idx["w"] = j
+
+    def conv(v):
+        v = (v or "").strip()
+        if v == "":
+            return None
+        if "наличи" in v.lower():
+            return "нет в наличии"
+        d = re.sub(r"[^\d]", "", v)
+        return int(d) if d else None
+
+    out = {}
+    for row in grid[1:]:
+        name = (row[0].strip() if row and row[0] else "")
+        if not name or name in EXCLUDE or name.lower() in ("вб", "вб москва"):
+            continue
+        def cell(k):
+            j = idx.get(k)
+            return row[j] if (j is not None and j < len(row)) else ""
+        out[name] = (conv(cell("do")), conv(cell("s")), conv(cell("w")))
+    return out
+
+
 def collect(l1_names):
     """Отслеживаем РОВНО артикулы из Лист1 (колонка B, WB-блок) — контролируемый
     владельцем список. SKU резолвим авто из кабинета по vendorCode. Новый артикул,
@@ -460,25 +514,27 @@ def run():
     l1 = sh.worksheet(SNAP_TAB)
     l1_names = {(v or "").strip() for v in l1.col_values(2) if (v or "").strip()}
 
-    data, misses = collect(l1_names)
-    got = sum(1 for v in data.values() if v[1] is not None)
-    print(f"[prices] {run_label}: собрано {got}/{len(data)}; без цены: {misses}", flush=True)
+    # ВБ-цены Лист1 теперь пишет удалённый комп (неличный логин, задания ASFARM_WB_07/13).
+    # MPStats-снимок здесь НЕ пишем и B1 НЕ штампуем — иначе перезатрём цены с ПК.
+    # Берём данные из Лист1 (реальные с ПК) только для ИСТОРИИ ВБ.
+    data = wb_from_sheet(sh)
+    got = sum(1 for v in data.values() if v and v[1] is not None)
+    print(f"[prices] {run_label}: ВБ из Лист1 (данные ПК): {got} строк", flush=True)
 
     if DRY:
         print("[prices][DRY] запись пропущена", flush=True); return
 
-    try:
-        w = write_snapshot(sh, data)
-        _stamp_note(l1, 1, f"ВБ обновлено {now:%Y-%m-%d %H:%M} (снимок {w})")  # B1 — сторож читает
-        if run_label == "13:00" and HIST_ENABLED:
-            push_history_column(sh, data, now)
-            print(f"[prices] WB: снимок {w}; столбец истории {now:%d.%m.%Y}", flush=True)
-        else:
-            print(f"[prices] WB: снимок {w} (история — только 13:00/включена)", flush=True)
-    except Exception as e:
-        print(f"[prices] ОШИБКА WB-записи: {e}", flush=True)
-        _alert(f"⚠️ <b>Цены WB: ошибка записи.</b>\nПрогон {run_label}. {str(e)[:200]}")
-        raise
+    if run_label == "13:00" and HIST_ENABLED:
+        try:
+            note = _wb_note_b1()
+            today_s = now.strftime("%Y-%m-%d")
+            if (today_s in note) and ("LOGOUT" not in note):
+                push_history_column(sh, data, now)
+                print(f"[prices] WB: столбец истории {now:%d.%m.%Y} из Лист1 (данные ПК)", flush=True)
+            else:
+                print(f"[prices] WB: Лист1 не свеж сегодня (B1={note!r}) — историю не пишу", flush=True)
+        except Exception as e:
+            print(f"[prices] WB история пропущена: {e}", flush=True)
 
     # ---- Ozon: цены Лист1 пишет удалённый комп (под логином). Здесь только ИСТОРИЯ OZ —
     #      той же логикой, что ВБ (push_history_column), но данные берём из Лист1 (комп),
@@ -496,11 +552,10 @@ def run():
         except Exception as e:
             print(f"[prices] Ozon история пропущена (не критично): {e}", flush=True)
 
-    if len(misses) > ALLOWED_MISS:
-        _alert(f"⚠️ <b>Цены WB: собрано только {got}/{len(data)}.</b>\n"
-               f"Прогон {run_label}. Без цены: {', '.join(misses)}.")
+    # (алерт по недосбору ВБ убран: снимок теперь на ПК, свежесть следит сторож)
 
 
 if __name__ == "__main__":
     run()
+
 
