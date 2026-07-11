@@ -109,24 +109,56 @@ def _gemini(user: str) -> str:
     raise last
 
 
+# Фолбэк по ключевым словам — работает БЕЗ ИИ. Чтобы дайджест НИКОГДА не зависел от
+# лимита/кредитов Gemini и не слал ложное «ничего полезного» (2026-07-11: Gemini выел
+# дневной лимит → 429 на каждом посте → снова ложное «пусто»). Грубее ИИ, но всегда живой.
+_KW_SKIP = ("розыгрыш", "конкурс", "вебинар", "практикум", "марафон", "инфлюенс", "блогер",
+            "бартер", "рилс", "reels", "подписывайт", "промокод на курс", "#реклама",
+            "с днём", "поздравля", "доброе утро")
+_KW_KEEP = ("комисси", "тариф", "логистик", "удержани", "штраф", "регламент", "правил",
+            "приёмк", "возврат", "продвижен", "реклам", "ставк", "автобиддер", "биддер",
+            "выкуп", "органик", "seo", "сео", "карточк", "инфографик", "воронк", "конверс",
+            "оборачива", "остатк", "поставк", "демпинг", "акци", "буст", "озон", "ozon",
+            "wildberries", "вайлдберриз", "маркет", "дрр", "рублей", "₽")
+
+
+def _keyword_classify(channel: str, text: str) -> dict:
+    low = text.lower()
+    if any(k in low for k in _KW_SKIP):
+        return {"keep": False}
+    if sum(1 for k in _KW_KEEP if k in low) < 3:  # порог, чтобы не тащить болтовню
+        return {"keep": False}
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    cat = "правила" if any(k in low for k in ("комисси", "тариф", "правил", "штраф", "удержани", "регламент")) else "фишка"
+    return {"keep": True, "category": cat,
+            "headline": (lines[0] if lines else text[:90])[:90],
+            "argument": " ".join(lines[:4])[:500],
+            "apply": "проверить применимость к нашим товарам", "_kw": True}
+
+
 def classify(channel: str, text: str, client=None) -> dict:
-    """Разбор поста. keep=False — пропустить. При сбое мозга — БРОСАЕТ исключение."""
+    """Разбор поста. keep=False — пропустить. ИИ недоступен (лимит/кредиты/нет ключа) →
+    НЕ падаем и НЕ врём «пусто», а разбираем по ключевым словам (фолбэк)."""
     if len(text.strip()) < 25:  # совсем короткие (мемы/реакции) не гоняем
         return {"keep": False}
     user = f"Канал: @{channel}\n\nПост:\n{text[:6000]}"
-    if GEMINI_KEY:
-        out = _gemini(user)
-    elif os.environ.get("ANTHROPIC_API_KEY"):
-        import anthropic
-        client = client or anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
-        msg = client.messages.create(model=MODEL, max_tokens=500, system=_SYSTEM,
-                                     messages=[{"role": "user", "content": user}])
-        out = "".join(b.text for b in msg.content if b.type == "text")
-    else:
-        raise RuntimeError("нет мозга классификатора: не задан ни GEMINI_KEY, ни ANTHROPIC_API_KEY")
-    res = _extract_json(out)
-    res["keep"] = bool(res.get("keep"))
-    return res
+    try:
+        if GEMINI_KEY:
+            out = _gemini(user)
+        elif os.environ.get("ANTHROPIC_API_KEY"):
+            import anthropic
+            client = client or anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
+            msg = client.messages.create(model=MODEL, max_tokens=500, system=_SYSTEM,
+                                         messages=[{"role": "user", "content": user}])
+            out = "".join(b.text for b in msg.content if b.type == "text")
+        else:
+            raise RuntimeError("нет LLM-ключа")
+        res = _extract_json(out)
+        res["keep"] = bool(res.get("keep"))
+        return res
+    except Exception as e:
+        print(f"[KW-FALLBACK] @{channel}: ИИ недоступен ({str(e)[:50]}) → ключевые слова", flush=True)
+        return _keyword_classify(channel, text)
 
 
 def emoji(category: str) -> str:
