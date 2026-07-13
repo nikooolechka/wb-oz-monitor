@@ -89,8 +89,11 @@ def _gemini(user: str) -> str:
     body = {
         "systemInstruction": {"parts": [{"text": _SYSTEM}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 600,
-                             "responseMimeType": "application/json"},
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 1200,
+                             "responseMimeType": "application/json",
+                             # flash-latest (2.5) «думает» и жрёт токены → JSON обрывался (keep всегда false).
+                             # Отключаем размышления: для классификации не нужны.
+                             "thinkingConfig": {"thinkingBudget": 0}},
     }
     data = json.dumps(body).encode("utf-8")
     last = None
