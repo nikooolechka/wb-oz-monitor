@@ -2,7 +2,11 @@ name: Еженедельная сводка отзывов WB (пн 15:00 МСК
 
 on:
   schedule:
-    - cron: "0 12 * * 1"     # понедельник 12:00 UTC = 15:00 МСК
+    # понедельник, несколько времён — если один крон GitHub дропнется, поймает следующий.
+    # Дедуп в скрипте (одна сводка на неделю) не даст задвоить.
+    - cron: "0 12 * * 1"     # 15:00 МСК
+    - cron: "0 14 * * 1"     # 17:00 МСК (резерв)
+    - cron: "0 16 * * 1"     # 19:00 МСК (резерв)
   workflow_dispatch:
     inputs:
       dry:
@@ -11,7 +15,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: wb_reviews_weekly
@@ -36,3 +40,10 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           DRY: ${{ inputs.dry && '1' || '' }}
         run: python wb_reviews_weekly.py
+      - name: Сохранить состояние (какая неделя уже отправлена)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/reviews_weekly_state.json || true
+          git commit -m "reviews weekly state [skip ci]" || echo "нечего коммитить"
+          git push || echo "нечего пушить"
