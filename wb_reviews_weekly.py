@@ -137,10 +137,24 @@ def main():
     lines += ["", "Человек, обрати внимание😏"]
     msg = "\n".join(lines)
     print("--- СВОДКА ---\n" + msg, flush=True)
+    # дедуп: одна сводка на неделю. Резервные крон-времена (пн 15/17/19) не задвоят,
+    # а если один крон дропнется — поймает следующий. Ключ недели = понедельник запуска.
+    week_key = mon_this.isoformat()
+    state_path = "data/reviews_weekly_state.json"
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            already = json.load(f).get("last_sent_week") == week_key
+    except (FileNotFoundError, json.JSONDecodeError):
+        already = False
     if DRY:
         print("DRY=1 — в канал НЕ отправлено")
+    elif already:
+        print(f"сводка за неделю {week_key} уже отправлена — пропуск (дубля не будет)")
     else:
         notify.send(msg); print("отправлено в канал")
+        os.makedirs("data", exist_ok=True)
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump({"last_sent_week": week_key}, f)
 
 
 if __name__ == "__main__":
