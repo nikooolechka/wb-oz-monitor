@@ -111,7 +111,7 @@ def fetch_channel(channel: str) -> list[Post]:
     seen_ids: set[int] = set()
     before_id: int | None = None
 
-    for _ in range(3):
+    for _ in range(8):  # было 3 — активные каналы за утро не докручивали до вчера
         url = f"https://t.me/s/{channel}"
         if before_id is not None:
             url += f"?before={before_id}"
