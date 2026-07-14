@@ -3,6 +3,8 @@ name: Дайджест постов каналов WB/Ozon
 on:
   schedule:
     - cron: "30 6 * * *"   # 09:30 МСК
+    - cron: "0 7 * * *"    # 10:00 МСК (резерв на дроп крона)
+    - cron: "30 7 * * *"   # 10:30 МСК (резерв)
   workflow_dispatch:
 
 permissions:
