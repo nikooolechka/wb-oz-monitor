@@ -67,8 +67,10 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
     двигаем только по включённым постам.
     """
     today = datetime.now(MSK).date()
-    yesterday = today - timedelta(days=1)
+    cutoff = today - timedelta(days=2)  # окно догоняния: если прогон пропущен/опоздал (крон дропнулся),
+    # вчерашние посты не проскочат — берём все НЕразобранные за 2 завершённых суток (дедуп по last_id не даст повторов)
     new_posts: list[src.Post] = []
+    dbg_win = dbg_skip = 0  # диагностика: сколько в 2-дн окне и сколько отсечено указателем (уже разобраны)
     for ch in src.CHANNELS:
         try:
             posts = src.fetch_channel(ch)
@@ -78,13 +80,17 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
         if not posts:
             continue
         last_id = state.get(ch)
+        in_win = [p for p in posts if cutoff <= p.dt.astimezone(MSK).date() < today]
+        dbg_win += len(in_win)
+        dbg_skip += len([p for p in in_win if last_id is not None and p.post_id <= last_id])
         cand = posts if last_id is None else [p for p in posts if p.post_id > last_id]
-        eligible = [p for p in cand if p.dt.astimezone(MSK).date() == yesterday]
+        eligible = [p for p in cand if cutoff <= p.dt.astimezone(MSK).date() < today]
         new_posts.extend(eligible)
         if eligible:
             state[ch] = max(p.post_id for p in eligible)
         elif last_id is not None:
             state[ch] = last_id
+    print(f"[DIAG] в 2-дн окне постов={dbg_win}, отсечено указателем(уже разобраны)={dbg_skip}, к разбору={len(new_posts)}", flush=True)
     new_posts.sort(key=lambda p: p.dt)
     return new_posts, state
 
@@ -182,6 +188,7 @@ def run_once() -> None:
             _save(fail_state)
         raise SystemExit("classification wholesale failure: посты есть, разобрать не смогли")
 
+    today_iso = datetime.now(MSK).date().isoformat()
     if entries:
         chunks = build_digest(entries)
         if PREVIEW:
@@ -191,10 +198,15 @@ def run_once() -> None:
         else:
             for c in chunks:
                 notify.send(c)
+            state["_digest_date"] = today_iso  # отметка: дайджест за сегодня отправлен
             print(f"[ALERT] дайджест отправлен в группу ({len(entries)} пунктов, {len(chunks)} сообщ.)", flush=True)
     else:
+        already_today = state.get("_digest_date") == today_iso
         if PREVIEW:
             print("[PREVIEW] пусто — в группу ушло бы: " + NOTHING_MSG, flush=True)
+        elif already_today:
+            # резервный крон-прогон после уже отправленного дайджеста — молчим, не шлём ложное «пусто»
+            print("[INFO] дайджест за сегодня уже отправлен — резервный прогон молчит", flush=True)
         else:
             notify.send(NOTHING_MSG)
             print("[INFO] мозг отработал, ничего не прошло порог — статус-сообщение в группу", flush=True)
