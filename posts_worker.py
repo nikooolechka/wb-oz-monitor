@@ -70,7 +70,7 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
     cutoff = today - timedelta(days=2)  # окно догоняния: если прогон пропущен/опоздал (крон дропнулся),
     # вчерашние посты не проскочат — берём все НЕразобранные за 2 завершённых суток (дедуп по last_id не даст повторов)
     new_posts: list[src.Post] = []
-    dbg_win = dbg_skip = 0  # диагностика: сколько в 2-дн окне и сколько отсечено указателем (уже разобраны)
+    dbg_win = dbg_skip = 0; dbg_all = []  # диагностика: сколько в 2-дн окне и сколько отсечено указателем (уже разобраны)
     for ch in src.CHANNELS:
         try:
             posts = src.fetch_channel(ch)
@@ -80,6 +80,7 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
         if not posts:
             continue
         last_id = state.get(ch)
+        dbg_all += [p.dt.astimezone(MSK).date() for p in posts]
         in_win = [p for p in posts if cutoff <= p.dt.astimezone(MSK).date() < today]
         dbg_win += len(in_win)
         dbg_skip += len([p for p in in_win if last_id is not None and p.post_id <= last_id])
@@ -90,7 +91,8 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
             state[ch] = max(p.post_id for p in eligible)
         elif last_id is not None:
             state[ch] = last_id
-    print(f"[DIAG] в 2-дн окне постов={dbg_win}, отсечено указателем(уже разобраны)={dbg_skip}, к разбору={len(new_posts)}", flush=True)
+    _dr = f"{min(dbg_all)}..{max(dbg_all)}" if dbg_all else "нет"
+    print(f"[DIAG] всего постов из каналов={len(dbg_all)} (даты {_dr}); в 2-дн окне={dbg_win}, отсечено указателем={dbg_skip}, к разбору={len(new_posts)}", flush=True)
     new_posts.sort(key=lambda p: p.dt)
     return new_posts, state
 
