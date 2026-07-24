@@ -19,8 +19,12 @@ from googleapiclient.discovery import build
 MSK = timezone(timedelta(hours=3))
 SHEET_ID = os.environ["PRICES_SHEET_ID"]
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
-TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
+# .strip() ОБЯЗАТЕЛЕН: секрет TELEGRAM_BOT_TOKEN хранится с лишним переносом
+# строки. Без strip URL становится '/bot<token>\n/sendMessage' → urllib падает
+# «URL can't contain control characters» и алерт молча не уходит. Именно из-за
+# этого сторож молчал неделю, пока цены с ПК стояли (notify.py strip уже делает).
+TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 GH_REPO = os.environ.get("GITHUB_REPOSITORY", "nikooolechka/wb-oz-monitor")
 GH_TOKEN = os.environ.get("GH_PAT") or os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = "data/price_watchdog_state.json"
@@ -37,7 +41,7 @@ def _notes():
     """Примечания ячеек A1..O1 Лист1 -> {col0: note}."""
     svc = _svc()
     res = svc.spreadsheets().get(
-        spreadsheetId=SHEET_ID, ranges=["Лист1!A1:O1"],
+        spreadsheetId=SHEET_ID, ranges=["Лист1!A1:U1"],
         fields="sheets.data.rowData.values.note").execute()
     out = {}
     try:
