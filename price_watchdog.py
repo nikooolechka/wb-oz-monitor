@@ -125,20 +125,29 @@ def run():
         print("[watchdog] ранняя фаза: чиню, не алертю", flush=True)
         _save_state(st); return
 
-    # финальная фаза 13:45 — алерт по тем, кто так и не обновился (один раз в день на маркет)
-    for name in logout:
-        if name in st["alerted"]:
-            continue
-        _tg("<b>Озон разлогинился в удалённом ПК — надо залогиниться для поддержания парсера цен.</b>")
-        st["alerted"].append(name)
-    for name in stale:
-        if name in st["alerted"]:
-            continue
-        _tg(f"<b>{name} цены — сегодня не обновил, что-то сломалось.</b>\n"
-            f"Николь, зайди пожалуйста в сессию — починим.")
-        st["alerted"].append(name)
-    if not (logout or stale):
-        print("[watchdog] всё свежее — тишина", flush=True)
+    # финальная фаза 13:45 — ОДИН дайджест-статус в день: и пруф «живо», и алерт при сбое.
+    # Владелец просила постоянный контроль без сюрпризов → каждый день видит статус
+    # всех 4 маркетов (✅ свежие / ❌ не обновились), даже когда всё хорошо.
+    if "digest" not in st.get("alerted", []):
+        lines = []
+        for name, c in MARKETS:
+            note = notes.get(c, "")
+            if ("LOGOUT" in note) and (today in note):
+                lines.append(f"❌ {name}: Озон разлогинен на ПК — нужен вход в кабинет")
+            elif today in note:
+                lines.append(f"✅ {name}: свежие сегодня")
+            elif not note:
+                lines.append(f"⚠️ {name}: базы ещё нет")
+            else:
+                last = note.split("обновлено")[-1].strip()[:16] if "обновлено" in note else note[:16]
+                lines.append(f"❌ {name}: НЕ обновились (посл. {last})")
+        bad = bool(logout or stale)
+        head = ("<b>⚠️ Цены: сегодня обновились НЕ все</b>" if bad
+                else "<b>✅ Цены собраны сегодня — все маркеты</b>")
+        tail = "\n\nНиколь, зайди пожалуйста — починим." if bad else ""
+        _tg(head + "\n" + "\n".join(lines) + tail)
+        st.setdefault("alerted", []).append("digest")
+        print("[watchdog] дайджест отправлен:", "СБОЙ" if bad else "всё ок", flush=True)
     _save_state(st)
 
 if __name__ == "__main__":
