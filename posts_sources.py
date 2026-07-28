@@ -45,31 +45,36 @@ TIMEOUT = 30
 # с жилого IP) — прямой запрос, бесплатно.
 SCRAPFLY_KEY = (os.environ.get("SCRAPFLY_KEY_SOCIAL")
                 or os.environ.get("SCRAPFLY_KEY") or "").strip()
-# С облака (Scrapfly, платно) — до 2 страниц/канал, но с РАННИМ ОБРЫВОМ: 2-я
-# страница качается ТОЛЬКО если на 1-й ещё не дошли до позавчера (т.е. канал
-# настолько активный, что 20 постов не покрыли сутки). У большинства каналов
-# 2-3 поста/день → им хватает 1 страницы (1 кредит), 2-я не качается. Лишний
-# кредит платим лишь за единичные активные каналы. Итог ~30-35 кред/день ≈
-# ~960/мес из 1000 на соц-ключе, при ПОЛНОМ покрытии суток.
-MAX_PAGES = 2 if SCRAPFLY_KEY else 8
+# Прямое чтение бесплатное → листаем полными сутками (ранний обрыв сам
+# остановится, как дойдём до позавчера). Кредиты не при чём — прямой путь основной.
+MAX_PAGES = 8
 
 
 def _fetch_html(url: str) -> str:
-    """HTML страницы t.me/s/. Через Scrapfly, если задан ключ; иначе напрямую."""
-    if SCRAPFLY_KEY:
+    """HTML страницы t.me/s/.
+
+    ПРЯМОЙ запрос — основной и БЕСПЛАТНЫЙ (t.me с GitHub достаётся, проверено
+    live 2026-07-28: HTTP 200, 19 постов). Блокировка в июле была транзиентной,
+    не постоянной. Scrapfly — ТОЛЬКО запасной путь, если прямой вдруг отвалится
+    (новый блип). В норме кредиты НЕ тратятся вообще.
+    """
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
+        r.raise_for_status()
+        return r.text
+    except Exception as direct_err:
+        if not SCRAPFLY_KEY:
+            raise
         from urllib.parse import quote
         api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
                + "&url=" + quote(url, safe=""))
         r = requests.get(api, timeout=120, verify=VERIFY)
         r.raise_for_status()
-        res = (r.json().get("result") or {})
-        html = res.get("content") or ""
+        html = (r.json().get("result") or {}).get("content") or ""
         if not html:
-            raise RuntimeError(f"Scrapfly вернул пустой контент для {url}")
+            raise RuntimeError(f"и прямой ({direct_err}), и Scrapfly не дали контент для {url}")
+        print(f"[FALLBACK] прямой t.me отвалился ({str(direct_err)[:60]}) → Scrapfly", flush=True)
         return html
-    r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
-    r.raise_for_status()
-    return r.text
 
 # 28 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
 CHANNELS = [
