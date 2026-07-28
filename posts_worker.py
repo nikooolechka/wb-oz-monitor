@@ -147,6 +147,15 @@ def run_once() -> None:
     state = _load()
     orig = dict(state)  # снимок ДО мутации — при сбое мозга не теряем посты
     first_run = not state
+
+    # 🔴 ДЕДУП ДО СБОРА (критично для бюджета Scrapfly): если дайджест за сегодня
+    # уже отправлен — выходим НЕ качая каналы. Иначе резервные кроны (10:00/10:30)
+    # жгли бы кредиты ×3 в день впустую (сбор идёт раньше, чем проверка «уже слал»).
+    if not PREVIEW and state.get("_digest_date") == datetime.now(MSK).date().isoformat():
+        print("[INFO] дайджест за сегодня уже отправлен — выхожу ДО сбора каналов, "
+              "кредиты Scrapfly не трогаю", flush=True)
+        return
+
     new_posts, state = collect_new(state)
     print(f"[INFO] новых постов к разбору: {len(new_posts)}", flush=True)
 
