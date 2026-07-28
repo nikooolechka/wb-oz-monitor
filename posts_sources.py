@@ -38,6 +38,36 @@ HEADERS = {
 }
 TIMEOUT = 30
 
+# t.me/s/ заблокирован с дата-центровых IP (GitHub Actions/Яндекс) с ~середины
+# июля 2026 — прямой requests.get даёт «Failed to resolve t.me». Их прокси-сеть
+# t.me достаёт → читаем через Scrapfly (плейн datacenter-прокси, ~1 кредит/стр.).
+# Ключ — отдельный соц-аккаунт Scrapfly (фолбэк на основной). Без ключа (локально
+# с жилого IP) — прямой запрос, бесплатно.
+SCRAPFLY_KEY = (os.environ.get("SCRAPFLY_KEY_SOCIAL")
+                or os.environ.get("SCRAPFLY_KEY") or "").strip()
+# С облака (через Scrapfly, платно) листаем максимум 2 страницы/канал ради
+# экономии кредитов — вчерашние посты почти всегда в первых ~20-40. Локально
+# (бесплатно, прямой запрос) можно глубже.
+MAX_PAGES = 2 if SCRAPFLY_KEY else 8
+
+
+def _fetch_html(url: str) -> str:
+    """HTML страницы t.me/s/. Через Scrapfly, если задан ключ; иначе напрямую."""
+    if SCRAPFLY_KEY:
+        from urllib.parse import quote
+        api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
+               + "&url=" + quote(url, safe=""))
+        r = requests.get(api, timeout=120, verify=VERIFY)
+        r.raise_for_status()
+        res = (r.json().get("result") or {})
+        html = res.get("content") or ""
+        if not html:
+            raise RuntimeError(f"Scrapfly вернул пустой контент для {url}")
+        return html
+    r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
+    r.raise_for_status()
+    return r.text
+
 # 28 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
 CHANNELS = [
     "rbordunov", "wbbillion", "dnative", "daryamelanich", "linnik_wb",
@@ -111,13 +141,11 @@ def fetch_channel(channel: str) -> list[Post]:
     seen_ids: set[int] = set()
     before_id: int | None = None
 
-    for _ in range(8):  # было 3 — активные каналы за утро не докручивали до вчера
+    for _ in range(MAX_PAGES):
         url = f"https://t.me/s/{channel}"
         if before_id is not None:
             url += f"?before={before_id}"
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
-        resp.raise_for_status()
-        page_posts = _parse(channel, resp.text)
+        page_posts = _parse(channel, _fetch_html(url))
         if not page_posts:
             break
         new_posts = [p for p in page_posts if p.post_id not in seen_ids]

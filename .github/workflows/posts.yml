@@ -6,6 +6,10 @@ on:
     - cron: "0 7 * * *"    # 10:00 МСК (резерв на дроп крона)
     - cron: "30 7 * * *"   # 10:30 МСК (резерв)
   workflow_dispatch:
+    inputs:
+      preview:
+        description: "1 = превью (собрать, но НЕ отправлять в канал; вывод в лог)"
+        default: "0"
 
 permissions:
   contents: write
@@ -33,6 +37,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          # t.me/s/ заблокирован с облака → читаем каналы через Scrapfly (соц-ключ,
+          # фолбэк на основной). Без него посты не соберутся (Failed to resolve t.me).
+          SCRAPFLY_KEY_SOCIAL: ${{ secrets.SCRAPFLY_KEY_SOCIAL }}
+          SCRAPFLY_KEY: ${{ secrets.SCRAPFLY_KEY }}
+          POSTS_PREVIEW: ${{ github.event.inputs.preview || '0' }}
           POSTS_STATE_PATH: data/posts_state.json
         run: python posts_worker.py
 
