@@ -37,6 +37,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+          GEMINI_KEY_DIGEST: ${{ secrets.GEMINI_KEY_DIGEST }}
           # t.me/s/ заблокирован с облака → читаем каналы через Scrapfly (соц-ключ,
           # фолбэк на основной). Без него посты не соберутся (Failed to resolve t.me).
           SCRAPFLY_KEY_SOCIAL: ${{ secrets.SCRAPFLY_KEY_SOCIAL }}
