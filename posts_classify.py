@@ -18,7 +18,11 @@ import urllib.request
 import urllib.error
 
 MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
-GEMINI_KEY = os.environ.get("GEMINI_KEY", "").strip()
+# Отдельный ключ дайджеста (свой free-лимит, НЕ делит с постером → почти всегда
+# ИИ-классификация, а не грубый keyword-фолбэк → реклама не проскакивает).
+# Фолбэк на общий GEMINI_KEY, если отдельный не задан.
+GEMINI_KEY = (os.environ.get("GEMINI_KEY_DIGEST")
+              or os.environ.get("GEMINI_KEY", "")).strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")  # 2.0-flash Google лишил free-tier (limit:0) 2026-07 → latest
 
 _CTX = ssl.create_default_context()
