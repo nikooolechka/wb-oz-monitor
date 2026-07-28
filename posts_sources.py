@@ -61,40 +61,77 @@ class DirectDownError(RuntimeError):
 MAX_FALLBACK_STREAK = 3
 _fallback_streak = 0
 
+# ── Защита от ПРИРОДЫ июльского сбоя: DNS-резолв t.me на раннере GitHub упал
+# («Failed to resolve 't.me'»), при этом остальная сеть работала. Значит чиним
+# именно DNS: если системный резолвер не смог t.me — берём его IP через DoH
+# (dns.google по HTTPS, свой резолвер) и «пиним» на уровне сокета, после чего
+# читаем t.me НАПРЯМУЮ (бесплатно). Это тир ДО Scrapfly. ─────────────────────
+import socket as _socket
+_PIN: dict = {}
+_orig_getaddrinfo = _socket.getaddrinfo
+def _patched_getaddrinfo(host, *a, **kw):
+    return _orig_getaddrinfo(_PIN.get(host, host), *a, **kw)
+_socket.getaddrinfo = _patched_getaddrinfo
+
+
+def _doh_ip(host: str = "t.me"):
+    """IP host'а через DoH (dns.google, HTTPS) — в обход сломанного DNS раннера."""
+    r = requests.get("https://dns.google/resolve",
+                     params={"name": host, "type": "A"}, timeout=15, verify=VERIFY)
+    for ans in (r.json().get("Answer") or []):
+        if ans.get("type") == 1 and ans.get("data"):
+            return ans["data"]
+    return None
+
+
+def _direct(url: str) -> str:
+    r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
+    r.raise_for_status()
+    return r.text
+
 
 def _fetch_html(url: str) -> str:
-    """HTML страницы t.me/s/.
-
-    ПРЯМОЙ запрос — основной и БЕСПЛАТНЫЙ, пробуется ПЕРВЫМ ВСЕГДА (t.me с GitHub
-    достаётся, проверено live 2026-07-28: HTTP 200, 19 постов; июльский блок был
-    транзиентным). Scrapfly — только временный обход на блип, не чаще 3 раз подряд.
-    """
+    """HTML t.me/s/. Три тира: (1) прямой — бесплатно, ВСЕГДА первый; (2) DoH-пин
+    IP + прямой — бесплатно, лечит DNS-сбой раннера (природа июля); (3) Scrapfly —
+    крайняя мера, не чаще 3 раз подряд, дальше сигнал «чинить»."""
     global _fallback_streak
+    # Тир 1 — прямой
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
-        r.raise_for_status()
-        _fallback_streak = 0            # прямой жив → обход не нужен, счётчик в ноль
-        return r.text
-    except Exception as direct_err:
-        if not SCRAPFLY_KEY:
-            raise
-        if _fallback_streak >= MAX_FALLBACK_STREAK:
-            # прямой недоступен подряд > лимита → обход НЕ решение, дальше не жжём
-            raise DirectDownError(
-                f"прямой t.me недоступен подряд >{MAX_FALLBACK_STREAK} раз "
-                f"(последняя ошибка: {str(direct_err)[:80]})")
-        _fallback_streak += 1
-        from urllib.parse import quote
-        api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
-               + "&url=" + quote(url, safe=""))
-        r = requests.get(api, timeout=120, verify=VERIFY)
-        r.raise_for_status()
-        html = (r.json().get("result") or {}).get("content") or ""
-        if not html:
-            raise RuntimeError(f"и прямой ({direct_err}), и Scrapfly пусто для {url}")
-        print(f"[FALLBACK {_fallback_streak}/{MAX_FALLBACK_STREAK}] прямой t.me "
-              f"отвалился ({str(direct_err)[:50]}) → временно Scrapfly", flush=True)
+        html = _direct(url)
+        _fallback_streak = 0
         return html
+    except Exception as e1:
+        pass
+    # Тир 2 — DoH-пин IP t.me + прямой (бесплатно, против DNS-сбоя раннера)
+    try:
+        ip = _doh_ip("t.me")
+        if ip:
+            _PIN["t.me"] = ip
+            html = _direct(url)
+            _fallback_streak = 0
+            print(f"[DoH] DNS t.me сбоил на раннере → резолв через dns.google={ip}, "
+                  f"читаю НАПРЯМУЮ (0 кредитов)", flush=True)
+            return html
+    except Exception:
+        pass
+    # Тир 3 — Scrapfly, крайняя мера с лимитом
+    if not SCRAPFLY_KEY:
+        raise RuntimeError(f"t.me недоступен и прямой, и через DoH: {url}")
+    if _fallback_streak >= MAX_FALLBACK_STREAK:
+        raise DirectDownError(
+            f"прямой t.me (и DoH) недоступны подряд >{MAX_FALLBACK_STREAK} раз")
+    _fallback_streak += 1
+    from urllib.parse import quote
+    api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
+           + "&url=" + quote(url, safe=""))
+    r = requests.get(api, timeout=120, verify=VERIFY)
+    r.raise_for_status()
+    html = (r.json().get("result") or {}).get("content") or ""
+    if not html:
+        raise RuntimeError(f"и прямой, и DoH, и Scrapfly пусто для {url}")
+    print(f"[FALLBACK {_fallback_streak}/{MAX_FALLBACK_STREAK}] прямой+DoH t.me "
+          f"не дали → временно Scrapfly (крайняя мера)", flush=True)
+    return html
 
 # 28 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
 CHANNELS = [
