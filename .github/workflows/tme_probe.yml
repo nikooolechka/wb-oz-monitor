@@ -1,0 +1,17 @@
+name: tme probe (разовая проверка прямого доступа к t.me)
+on: { workflow_dispatch: {} }
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: прямой доступ к t.me с GitHub-раннера
+        run: |
+          echo "=== 1) DNS резолв t.me ==="
+          getent hosts t.me || echo "DNS: НЕ резолвится"
+          nslookup t.me || true
+          echo "=== 2) curl t.me/s/durov (прямой) ==="
+          code=$(curl -s -o /tmp/p.html -w "%{http_code}" --max-time 30 "https://t.me/s/durov" || echo "CURL_FAIL")
+          echo "HTTP: $code  размер: $(wc -c < /tmp/p.html 2>/dev/null || echo 0)"
+          echo "постов на странице: $(grep -c tgme_widget_message_text /tmp/p.html 2>/dev/null || echo 0)"
+          echo "=== 3) заголовок ответа ==="
+          curl -sI --max-time 20 "https://t.me/s/durov" | head -8 || echo "нет ответа"
