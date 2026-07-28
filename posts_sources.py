@@ -58,8 +58,11 @@ class DirectDownError(RuntimeError):
 # в который мы не влезаем — гонять по нему дайджест каждый день НЕЛЬЗЯ). Если
 # обход сработал >3 раз подряд → прямой t.me лёг широко: стоп жечь кредиты и
 # сигнал «чинить». Любой успех прямого пути обнуляет счётчик.
-MAX_FALLBACK_STREAK = 3
-_fallback_streak = 0
+# Scrapfly-обход разрешён ТОЛЬКО когда прямой путь (тир1+тир2) лёг широко, и не
+# дольше, чем воркер позволит (счётчик ДНЕЙ в состоянии: 2 дня обход, на 3-й
+# отруб+алерт). Ставится воркером перед сбором. По умолчанию ВЫКЛ — в норме
+# читаем только бесплатно.
+ALLOW_SCRAPFLY = False
 
 # ── Защита от ПРИРОДЫ июльского сбоя: DNS-резолв t.me на раннере GitHub упал
 # («Failed to resolve 't.me'»), при этом остальная сеть работала. Значит чиним
@@ -90,48 +93,54 @@ def _direct(url: str) -> str:
     return r.text
 
 
-def _fetch_html(url: str) -> str:
-    """HTML t.me/s/. Три тира: (1) прямой — бесплатно, ВСЕГДА первый; (2) DoH-пин
-    IP + прямой — бесплатно, лечит DNS-сбой раннера (природа июля); (3) Scrapfly —
-    крайняя мера, не чаще 3 раз подряд, дальше сигнал «чинить»."""
-    global _fallback_streak
-    # Тир 1 — прямой
+def _free_fetch(url: str):
+    """Бесплатные тиры: (1) прямой; (2) DoH-пин IP + прямой. Возвращает HTML или
+    None, если оба не сработали (тогда решает вызывающий — Scrapfly или пропуск)."""
     try:
-        html = _direct(url)
-        _fallback_streak = 0
-        return html
-    except Exception as e1:
+        return _direct(url)
+    except Exception:
         pass
-    # Тир 2 — DoH-пин IP t.me + прямой (бесплатно, против DNS-сбоя раннера)
     try:
         ip = _doh_ip("t.me")
         if ip:
             _PIN["t.me"] = ip
             html = _direct(url)
-            _fallback_streak = 0
-            print(f"[DoH] DNS t.me сбоил на раннере → резолв через dns.google={ip}, "
-                  f"читаю НАПРЯМУЮ (0 кредитов)", flush=True)
+            print(f"[DoH] DNS t.me сбоил → резолв через dns.google={ip}, читаю "
+                  f"НАПРЯМУЮ (0 кредитов)", flush=True)
             return html
     except Exception:
         pass
-    # Тир 3 — Scrapfly, крайняя мера с лимитом
-    if not SCRAPFLY_KEY:
-        raise RuntimeError(f"t.me недоступен и прямой, и через DoH: {url}")
-    if _fallback_streak >= MAX_FALLBACK_STREAK:
-        raise DirectDownError(
-            f"прямой t.me (и DoH) недоступны подряд >{MAX_FALLBACK_STREAK} раз")
-    _fallback_streak += 1
+    return None
+
+
+def _scrapfly_fetch(url: str) -> str:
     from urllib.parse import quote
     api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
            + "&url=" + quote(url, safe=""))
     r = requests.get(api, timeout=120, verify=VERIFY)
     r.raise_for_status()
-    html = (r.json().get("result") or {}).get("content") or ""
-    if not html:
-        raise RuntimeError(f"и прямой, и DoH, и Scrapfly пусто для {url}")
-    print(f"[FALLBACK {_fallback_streak}/{MAX_FALLBACK_STREAK}] прямой+DoH t.me "
-          f"не дали → временно Scrapfly (крайняя мера)", flush=True)
-    return html
+    return (r.json().get("result") or {}).get("content") or ""
+
+
+def probe_direct() -> bool:
+    """Жив ли БЕСПЛАТНЫЙ прямой путь (тир1/тир2)? Проба на одном канале, без
+    Scrapfly. Воркер по ней решает: обычный бесплатный день или включать обход."""
+    return _free_fetch(f"https://t.me/s/{CHANNELS[0]}") is not None
+
+
+def _fetch_html(url: str) -> str:
+    """HTML t.me/s/. Всегда сначала БЕСПЛАТНО (прямой → DoH-пин). Scrapfly —
+    только если воркер разрешил (ALLOW_SCRAPFLY=True: прямой лёг широко, в
+    пределах 2 дней обхода). Иначе — ошибка (канал пропустится/день отрубится)."""
+    html = _free_fetch(url)
+    if html is not None:
+        return html
+    if ALLOW_SCRAPFLY and SCRAPFLY_KEY:
+        html = _scrapfly_fetch(url)
+        if html:
+            print("[FALLBACK] прямой+DoH не дали → временно Scrapfly (обход, разрешён)", flush=True)
+            return html
+    raise RuntimeError(f"t.me недоступен (прямой+DoH), Scrapfly не разрешён/пусто: {url}")
 
 # 28 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
 CHANNELS = [
