@@ -50,21 +50,40 @@ SCRAPFLY_KEY = (os.environ.get("SCRAPFLY_KEY_SOCIAL")
 MAX_PAGES = 8
 
 
+class DirectDownError(RuntimeError):
+    """Прямой t.me недоступен подряд > лимита → обход НЕ спасение, надо чинить."""
+
+
+# Scrapfly — КРАЙНЯЯ мера, лимит 3 срабатывания ПОДРЯД (у Scrapfly свой лимит,
+# в который мы не влезаем — гонять по нему дайджест каждый день НЕЛЬЗЯ). Если
+# обход сработал >3 раз подряд → прямой t.me лёг широко: стоп жечь кредиты и
+# сигнал «чинить». Любой успех прямого пути обнуляет счётчик.
+MAX_FALLBACK_STREAK = 3
+_fallback_streak = 0
+
+
 def _fetch_html(url: str) -> str:
     """HTML страницы t.me/s/.
 
-    ПРЯМОЙ запрос — основной и БЕСПЛАТНЫЙ (t.me с GitHub достаётся, проверено
-    live 2026-07-28: HTTP 200, 19 постов). Блокировка в июле была транзиентной,
-    не постоянной. Scrapfly — ТОЛЬКО запасной путь, если прямой вдруг отвалится
-    (новый блип). В норме кредиты НЕ тратятся вообще.
+    ПРЯМОЙ запрос — основной и БЕСПЛАТНЫЙ, пробуется ПЕРВЫМ ВСЕГДА (t.me с GitHub
+    достаётся, проверено live 2026-07-28: HTTP 200, 19 постов; июльский блок был
+    транзиентным). Scrapfly — только временный обход на блип, не чаще 3 раз подряд.
     """
+    global _fallback_streak
     try:
         r = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=VERIFY)
         r.raise_for_status()
+        _fallback_streak = 0            # прямой жив → обход не нужен, счётчик в ноль
         return r.text
     except Exception as direct_err:
         if not SCRAPFLY_KEY:
             raise
+        if _fallback_streak >= MAX_FALLBACK_STREAK:
+            # прямой недоступен подряд > лимита → обход НЕ решение, дальше не жжём
+            raise DirectDownError(
+                f"прямой t.me недоступен подряд >{MAX_FALLBACK_STREAK} раз "
+                f"(последняя ошибка: {str(direct_err)[:80]})")
+        _fallback_streak += 1
         from urllib.parse import quote
         api = ("https://api.scrapfly.io/scrape?key=" + SCRAPFLY_KEY
                + "&url=" + quote(url, safe=""))
@@ -72,8 +91,9 @@ def _fetch_html(url: str) -> str:
         r.raise_for_status()
         html = (r.json().get("result") or {}).get("content") or ""
         if not html:
-            raise RuntimeError(f"и прямой ({direct_err}), и Scrapfly не дали контент для {url}")
-        print(f"[FALLBACK] прямой t.me отвалился ({str(direct_err)[:60]}) → Scrapfly", flush=True)
+            raise RuntimeError(f"и прямой ({direct_err}), и Scrapfly пусто для {url}")
+        print(f"[FALLBACK {_fallback_streak}/{MAX_FALLBACK_STREAK}] прямой t.me "
+              f"отвалился ({str(direct_err)[:50]}) → временно Scrapfly", flush=True)
         return html
 
 # 28 каналов. Чат @viktor_gamm_mp исключён (см. docstring).
