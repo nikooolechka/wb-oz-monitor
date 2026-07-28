@@ -156,7 +156,23 @@ def run_once() -> None:
               "кредиты Scrapfly не трогаю", flush=True)
         return
 
-    new_posts, state = collect_new(state)
+    try:
+        new_posts, state = collect_new(state)
+    except src.DirectDownError as e:
+        # Прямой сбор t.me лёг широко, обход (Scrapfly) остановлен на 3-м подряд,
+        # чтобы не жечь лимит. Это НЕ норма → алерт «чинить», дедуп 1/день.
+        today_iso = datetime.now(MSK).date().isoformat()
+        msg = ("<b>Дайджест отвалился — прямой сбор t.me не работает.</b>\n"
+               "Обходной путь (Scrapfly) сработал 3 раза подряд и остановлен, чтобы "
+               "не жечь лимит. Николь, зайди пожалуйста — надо чинить прямой сбор.")
+        if PREVIEW:
+            print("[PREVIEW] DIRECT DOWN — в группу ушло бы: " + msg, flush=True)
+        else:
+            if orig.get("_directdown_date") != today_iso:
+                notify.send(msg)
+                print("[ALERT] прямой t.me лёг, обход остановлен — алерт отправлен", flush=True)
+            fail = dict(orig); fail["_directdown_date"] = today_iso; _save(fail)
+        raise SystemExit(f"direct t.me down, обход остановлен на лимите: {e}")
     print(f"[INFO] новых постов к разбору: {len(new_posts)}", flush=True)
 
     entries: list[dict] = []
