@@ -156,23 +156,35 @@ def run_once() -> None:
               "кредиты Scrapfly не трогаю", flush=True)
         return
 
-    try:
-        new_posts, state = collect_new(state)
-    except src.DirectDownError as e:
-        # Прямой сбор t.me лёг широко, обход (Scrapfly) остановлен на 3-м подряд,
-        # чтобы не жечь лимит. Это НЕ норма → алерт «чинить», дедуп 1/день.
-        today_iso = datetime.now(MSK).date().isoformat()
-        msg = ("<b>Дайджест отвалился — прямой сбор t.me не работает.</b>\n"
-               "Обходной путь (Scrapfly) сработал 3 раза подряд и остановлен, чтобы "
-               "не жечь лимит. Николь, зайди пожалуйста — надо чинить прямой сбор.")
-        if PREVIEW:
-            print("[PREVIEW] DIRECT DOWN — в группу ушло бы: " + msg, flush=True)
+    # ── Прямой (бесплатный) путь жив? Проба на одном канале. Обход (Scrapfly)
+    # включаем ТОЛЬКО если прямой лёг ШИРОКО, и не дольше 2 дней подряд; на 3-й
+    # день — отруб обхода + алерт «чинить» (правило владелицы: 2 дня терпим —
+    # канал не молчит; 3-й день сломан → тревога, лимит не жжём). ──────────────
+    today_iso = datetime.now(MSK).date().isoformat()
+    if PREVIEW:
+        src.ALLOW_SCRAPFLY = False           # превью — только бесплатно, лимит не трогаем
+    else:
+        if src.probe_direct():
+            src.ALLOW_SCRAPFLY = False        # прямой жив → бесплатный день
+            state["_scrapfly_days"] = 0
         else:
-            if orig.get("_directdown_date") != today_iso:
-                notify.send(msg)
-                print("[ALERT] прямой t.me лёг, обход остановлен — алерт отправлен", flush=True)
-            fail = dict(orig); fail["_directdown_date"] = today_iso; _save(fail)
-        raise SystemExit(f"direct t.me down, обход остановлен на лимите: {e}")
+            days = int(orig.get("_scrapfly_days", 0))
+            if days >= 2:                     # это уже 3-й день сбоя → отруб + алерт
+                msg = ("<b>Дайджест отвалился — прямой сбор t.me не работает 3-й день.</b>\n"
+                       "Обход (Scrapfly) остановлен, чтобы не жечь лимит. "
+                       "Николь, зайди пожалуйста — надо чинить прямой сбор.")
+                if orig.get("_directdown_date") != today_iso:
+                    notify.send(msg)
+                    print("[ALERT] прямой t.me сломан 3-й день — алерт, обход отрублен", flush=True)
+                fail = dict(orig); fail["_directdown_date"] = today_iso
+                fail["_scrapfly_days"] = days
+                _save(fail)
+                raise SystemExit("direct t.me down 3-й день — обход отрублен")
+            src.ALLOW_SCRAPFLY = True          # день 1 или 2 сбоя → обход разрешён
+            state["_scrapfly_days"] = days + 1
+            print(f"[WARN] прямой t.me лёг — день {days+1}/2 сбора через обход (Scrapfly)", flush=True)
+
+    new_posts, state = collect_new(state)
     print(f"[INFO] новых постов к разбору: {len(new_posts)}", flush=True)
 
     entries: list[dict] = []
