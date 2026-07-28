@@ -215,7 +215,11 @@ def fetch_channel(channel: str) -> list[Post]:
     seen_ids: set[int] = set()
     before_id: int | None = None
 
-    for _ in range(MAX_PAGES):
+    # Прямой путь бесплатный → листаем глубоко (MAX_PAGES). Но в режиме ОБХОДА
+    # (Scrapfly, платно) режем до 2 страниц/канал, чтобы эпизод сбоя не сжёг
+    # лимит: 28 каналов × 2 стр × 2 дня ≈ 112 кред максимум (обычно ~60).
+    pages = 2 if ALLOW_SCRAPFLY else MAX_PAGES
+    for _ in range(pages):
         url = f"https://t.me/s/{channel}"
         if before_id is not None:
             url += f"?before={before_id}"
