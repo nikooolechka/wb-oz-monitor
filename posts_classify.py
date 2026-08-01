@@ -23,7 +23,7 @@ MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5")
 # Фолбэк на общий GEMINI_KEY, если отдельный не задан.
 GEMINI_KEY = (os.environ.get("GEMINI_KEY_DIGEST")
               or os.environ.get("GEMINI_KEY", "")).strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")  # 2.0-flash Google лишил free-tier (limit:0) 2026-07 → latest
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")  # 2.0-flash Google лишил free-tier (limit:0) 2026-07 → latest
 
 _CTX = ssl.create_default_context()
 try:
@@ -93,11 +93,12 @@ def _gemini(user: str) -> str:
     body = {
         "systemInstruction": {"parts": [{"text": _SYSTEM}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
+        # gemini-flash-lite-latest — единственная с реальным free-лимитом (2026-08):
+        # flash-latest/2.0-flash упираются в 429 почти на каждом запросе → всё
+        # валилось на keyword-фолбэк (шаблонный совет всем). flash-lite НЕ «думает»
+        # → thinkingConfig НЕ передавать (даёт 400 Bad Request), он тут и не нужен.
         "generationConfig": {"temperature": 0, "maxOutputTokens": 1200,
-                             "responseMimeType": "application/json",
-                             # flash-latest (2.5) «думает» и жрёт токены → JSON обрывался (keep всегда false).
-                             # Отключаем размышления: для классификации не нужны.
-                             "thinkingConfig": {"thinkingBudget": 0}},
+                             "responseMimeType": "application/json"},
     }
     data = json.dumps(body).encode("utf-8")
     last = None
