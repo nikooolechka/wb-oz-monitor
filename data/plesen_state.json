@@ -1,7 +1,17 @@
 {
   "plesen": {
-    "seen": [],
-    "events": [],
+    "seen": [
+      "wb_NXzmJxJbeQVLuFp5N9ar"
+    ],
+    "events": [
+      {
+        "id": "wb_NXzmJxJbeQVLuFp5N9ar",
+        "platform": "WB",
+        "product": "Dental_100",
+        "date": "2026-07-31",
+        "score": 5
+      }
+    ],
     "alerted": false,
     "initialized": true
   }
