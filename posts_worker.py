@@ -259,6 +259,16 @@ def run_once() -> None:
         entries = _dedup(entries)
         if len(entries) < before:
             print(f"[DEDUP] схлопнул дубли новости: {before} → {len(entries)}", flush=True)
+        # Обогащение советов НАШИМИ реальными цифрами. ПО УМОЛЧАНИЮ ВЫКЛЮЧЕНО
+        # (ENRICH=1) — включаем только когда базовый дайджест устоялся и цифры
+        # каждого источника проверены. Fail-safe: try/except + таймаут → если
+        # тормозит/падает, дайджест уходит с первичным советом, без задержки.
+        if os.environ.get("ENRICH") == "1":
+            try:
+                import posts_enrich
+                posts_enrich.enrich(entries, budget_sec=float(os.environ.get("ENRICH_BUDGET_SEC", "90")))
+            except Exception as _ee:
+                print(f"[ENRICH] пропущено ({_ee})", flush=True)
         chunks = build_digest(entries)
         if PREVIEW:
             print("\n" + "=" * 60 + "\nПРЕВЬЮ ДАЙДЖЕСТА (в группу НЕ отправлено):\n" + "=" * 60)
