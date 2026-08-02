@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import re
 import json
 import time
 import tempfile
@@ -95,6 +96,31 @@ def collect_new(state: dict) -> tuple[list[src.Post], dict]:
     print(f"[DIAG] всего постов из каналов={len(dbg_all)} (даты {_dr}); в 2-дн окне={dbg_win}, отсечено указателем={dbg_skip}, к разбору={len(new_posts)}", flush=True)
     new_posts.sort(key=lambda p: p.dt)
     return new_posts, state
+
+
+_DEDUP_STOP = set((
+    "wildberries wildberry wb вб ozon озон маркетплейс маркетплейса маркетплейсов "
+    "продавцов селлеров селлер продавец товаров товары новый новая новые для при "
+    "как что это его наши нам себе теперь снова опять будет может если чтобы "
+    "который которые тарифы тариф комиссия комиссии банк").split())
+
+
+def _dedup(entries: list[dict]) -> list[dict]:
+    """Схлопывает одну и ту же новость, взятую из разных каналов (сильное
+    пересечение значимых слов заголовка+сути). Оставляет вариант с самым
+    содержательным argument (длиннее/с цифрами)."""
+    def toks(e):
+        s = (e["res"].get("headline", "") + " " + e["res"].get("argument", "")[:140]).lower()
+        return set(w for w in re.findall(r"[а-яёa-z0-9]+", s) if len(w) > 3 and w not in _DEDUP_STOP)
+    kept: list[dict] = []
+    kept_toks: list[set] = []
+    for e in sorted(entries, key=lambda x: -len(x["res"].get("argument", ""))):  # сначала самые содержательные
+        t = toks(e)
+        if any(len(t & kt) >= 4 and len(t & kt) >= 0.5 * min(len(t), len(kt)) for kt in kept_toks if t and kt):
+            continue  # та же новость — уже есть более содержательный вариант
+        kept.append(e); kept_toks.append(t)
+    kept.sort(key=lambda x: x["post"].dt)  # обратно по времени
+    return kept
 
 
 def build_digest(entries: list[dict]) -> list[str]:
@@ -229,6 +255,10 @@ def run_once() -> None:
 
     today_iso = datetime.now(MSK).date().isoformat()
     if entries:
+        before = len(entries)
+        entries = _dedup(entries)
+        if len(entries) < before:
+            print(f"[DEDUP] схлопнул дубли новости: {before} → {len(entries)}", flush=True)
         chunks = build_digest(entries)
         if PREVIEW:
             print("\n" + "=" * 60 + "\nПРЕВЬЮ ДАЙДЖЕСТА (в группу НЕ отправлено):\n" + "=" * 60)
