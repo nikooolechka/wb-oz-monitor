@@ -1,0 +1,33 @@
+name: Отзывы Ozon — еженедельная сводка
+on:
+  schedule:
+    - cron: "0 12 * * 1"     # 15:00 МСК (как WB)
+    - cron: "0 14 * * 1"     # 17:00 МСК (резерв)
+    - cron: "0 16 * * 1"     # 19:00 МСК (резерв)
+  workflow_dispatch:
+    inputs:
+      dry: { type: boolean, default: false, description: "1=не слать в канал" }
+permissions: { contents: write }
+concurrency: { group: monitor, cancel-in-progress: false }
+jobs:
+  oz_reviews:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - env:
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ inputs.dry && '1' || '' }}
+        run: python oz_reviews_weekly.py
+      - name: save state
+        run: |
+          git config user.name "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/ || true
+          git commit -m "oz reviews weekly state [skip ci]" || echo "nothing"
+          git pull --rebase --autostash || true
+          git push || true
