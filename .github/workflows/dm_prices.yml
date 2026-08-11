@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install google-auth
+      - run: pip install google-auth requests
       - name: detmir -> таблица (промокод из labels, без Railway)
         env:
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
