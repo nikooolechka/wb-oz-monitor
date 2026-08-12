@@ -9,10 +9,10 @@
   • Лист1 (СНИМОК) — WB-блок: по имени артикула в колонке B ставит C/D/E.
     Столбец F (формула СПП) и другие площадки не трогает. Оба прогона.
   • «история WB» (СВОДНАЯ МАТРИЦА) — только прогон 13:00. Дизайн владельца:
-    A=Артикул(закр.) | B=серый столбец месяца (вертик.) | блоки дат по 3 столбца,
-    свежая дата сразу за серым (C:E), старее — правее. При смене месяца
-    прошедший месяц группируется+сворачивается, новый серый месяц — слева.
-    Раскладка/стиль — см. память reference_prices_history_layout.
+    A=Артикул(закр.) | B=серый столбец месяца (вертик.) | блоки дат по 4 столбца,
+    свежая дата сразу за серым (C:F), старее — правее. Блок = до СПП / с СПП /
+    с кошельком / СПП. При смене месяца прошедший месяц группируется+сворачивается,
+    новый серый месяц — слева. Раскладка/стиль — см. память reference_prices_history_layout.
 
 Источники — MPStats + WB seller-API (Scrapfly НЕ нужен). Облако (GitHub Actions).
 Запись истории включается env PRICES_HIST_ENABLED=1.
@@ -47,14 +47,14 @@ OZ_KEY = os.environ.get("OZON_API_KEY", "").strip()
 OZ_PROXY = os.environ.get("OZ_PROXY", "").strip()   # socks5://127.0.0.1:10808 (xray→Happ) для composer
 OZ_ENABLED = os.environ.get("PRICES_OZ_ENABLED", "") == "1"  # Ozon включается только после сверки
 OZ_HDR = {"J": "Текущая цена", "K": "Цена с другими банками", "L": "Цена с Озон картой"}
-OZ_SUB = ["текущая", "с банками", "с картой"]
+OZ_SUB = ["текущая", "с банками", "с картой", "СПП"]
 OZ_HIST_TAB = os.environ.get("PRICES_OZ_HISTORY_TAB", "история OZ")
 
 # Список артикулов НЕ хардкодится — берётся из кабинета WB (vendorCode→nmID).
 # Исключаем заведомо списанные/непрофильные (не добавлять их в Лист1/историю).
 EXCLUDE = {"Dental100_Animal", "Lapomoyka_500", "Gel_peeling", "Spray_fresh_new",
            "men_spray", "makeup_30"}
-SUBHEAD = ["до СПП", "с СПП", "с кошельком"]
+SUBHEAD = ["до СПП", "с СПП", "с кошельком", "СПП"]
 MONTHS_RU = {1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕЛЬ", 5: "МАЙ", 6: "ИЮНЬ",
              7: "ИЮЛЬ", 8: "АВГУСТ", 9: "СЕНТЯБРЬ", 10: "ОКТЯБРЬ", 11: "НОЯБРЬ", 12: "ДЕКАБРЬ"}
 
@@ -378,6 +378,19 @@ def _stamp_note(ws, col0, text):
 
 
 # ---------- история ----------
+def _spp_value(row, oz):
+    """СПП как доля (для %-формата). ВБ: 1 − сСПП/доСПП (row=до,спп,кошелёк).
+    Озон: 1 − карта/текущая (row=текущая,банки,карта). Нет данных/«нет в наличии» → ''."""
+    try:
+        base = float(row[0])
+        sale = float(row[2] if oz else row[1])
+    except (TypeError, ValueError, IndexError):
+        return ""
+    if base <= 0:
+        return ""
+    return round(1 - sale / base, 4)
+
+
 def _article_rows(ws):
     """Имена артикулов из колонки A начиная со строки 3 (без хвостовых пустых)."""
     col_a = ws.col_values(1)
@@ -405,38 +418,56 @@ def _setup_month_col(ws, sid, label, last_row):
 
 
 def _fmt_date_block(ws, sid, last_row, header_bg=HEADER_BG):
-    """Оформляет блок свежей даты — он всегда в столбцах C:E (индексы 2..4).
+    """Оформляет блок свежей даты — столбцы C:F (индексы 2..6): 3 цены + СПП.
     header_bg — цвет шапки даты (ВБ фиолетовый / Озон синий), един для листа."""
     ws.spreadsheet.batch_update({"requests": [
         {"mergeCells": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-            "startColumnIndex": 2, "endColumnIndex": 5}, "mergeType": "MERGE_ALL"}},
+            "startColumnIndex": 2, "endColumnIndex": 6}, "mergeType": "MERGE_ALL"}},
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 0, "endRowIndex": 1,
-            "startColumnIndex": 2, "endColumnIndex": 5},
+            "startColumnIndex": 2, "endColumnIndex": 6},
             "cell": {"userEnteredFormat": {"backgroundColor": header_bg, "horizontalAlignment": "CENTER",
                 "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "foregroundColor": WHITE}}},
             "fields": "userEnteredFormat"}},
+        # подшапки до СПП / с СПП (2..4) — обычный
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
             "startColumnIndex": 2, "endColumnIndex": 4},
             "cell": {"userEnteredFormat": {"backgroundColor": SUB_BG, "horizontalAlignment": "CENTER",
                 "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
             "fields": "userEnteredFormat"}},
+        # с кошельком / с картой (4..5) — мелкий шрифт (длинный заголовок)
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
             "startColumnIndex": 4, "endColumnIndex": 5},
             "cell": {"userEnteredFormat": {"backgroundColor": SUB_BG, "horizontalAlignment": "CENTER",
                 "verticalAlignment": "MIDDLE", "textFormat": {"bold": True, "fontSize": 8}, "wrapStrategy": "WRAP"}},
             "fields": "userEnteredFormat"}},
+        # СПП (5..6) — обычный
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 1, "endRowIndex": 2,
+            "startColumnIndex": 5, "endColumnIndex": 6},
+            "cell": {"userEnteredFormat": {"backgroundColor": SUB_BG, "horizontalAlignment": "CENTER",
+                "verticalAlignment": "MIDDLE", "textFormat": {"bold": True}, "wrapStrategy": "WRAP"}},
+            "fields": "userEnteredFormat"}},
+        # тело блока — выравнивание по центру
         {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": last_row,
-            "startColumnIndex": 2, "endColumnIndex": 5},
+            "startColumnIndex": 2, "endColumnIndex": 6},
             "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
             "fields": "userEnteredFormat"}},
+        # СПП — процентный формат (правим только numberFormat, выравнивание не трогаем)
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": last_row,
+            "startColumnIndex": 5, "endColumnIndex": 6},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}},
+            "fields": "userEnteredFormat.numberFormat"}},
+        # ширины: цены 73, СПП 55
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
             "startIndex": 2, "endIndex": 5}, "properties": {"pixelSize": 73}, "fields": "pixelSize"}},
+        {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
+            "startIndex": 5, "endIndex": 6}, "properties": {"pixelSize": 55}, "fields": "pixelSize"}},
     ]})
 
 
 def push_history_column(sh, data, now, tab=None, subhead=None):
     ws = sh.worksheet(tab or HIST_TAB)
     subhead = subhead or SUBHEAD
+    oz = (tab or HIST_TAB) == OZ_HIST_TAB
     sid = ws.id
     # страховка от дублей: если столбец сегодняшней даты уже есть (C1) — не добавляем второй
     today = now.strftime("%d.%m.%Y")
@@ -479,15 +510,18 @@ def push_history_column(sh, data, now, tab=None, subhead=None):
             "inheritFromBefore": False}}]})
         _setup_month_col(ws, sid, new_label, last_row)
 
-    # блок свежей даты — 3 столбца в индекс 2 (C), сразу за серым столбцом месяца
+    # блок свежей даты — 4 столбца в индекс 2 (C), сразу за серым столбцом месяца
     ws.spreadsheet.batch_update({"requests": [{"insertDimension": {"range": {
-        "sheetId": sid, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 5},
+        "sheetId": sid, "dimension": "COLUMNS", "startIndex": 2, "endIndex": 6},
         "inheritFromBefore": False}}]})
     date = now.strftime("%d.%m.%Y")
     ws.update([[date]], "C1", value_input_option="RAW")
     ws.update([subhead], "C2")
-    vals = [list(data.get(nm, ("", "", ""))) for nm in names]
-    ws.update(vals, f"C3:E{last_row}", value_input_option="USER_ENTERED")
+    vals = []
+    for nm in names:
+        r = list(data.get(nm, ("", "", "")))
+        vals.append(r + [_spp_value(r, oz)])
+    ws.update(vals, f"C3:F{last_row}", value_input_option="USER_ENTERED")
     hb = OZ_HEADER_BG if (tab or HIST_TAB) == OZ_HIST_TAB else HEADER_BG
     _fmt_date_block(ws, sid, last_row, header_bg=hb)
 
@@ -557,5 +591,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
-
