@@ -64,6 +64,7 @@ OZ_HEADER_BG = {"red": 0.0, "green": 0.0, "blue": 1.0}   # Озон: синий
 GRAYM_BG = {"red": 0.7176471, "green": 0.7176471, "blue": 0.7176471}
 SUB_BG = {"red": 0.9294118, "green": 0.9294118, "blue": 0.9294118}
 ART_BG = {"red": 0.8470588, "green": 0.9098039, "blue": 0.9568627}
+SPP_GREEN = {"red": 0.8509804, "green": 0.9176471, "blue": 0.827451}  # #D9EAD3 светло-зелёный (ячейки СПП)
 WHITE = {"red": 1, "green": 1, "blue": 1}
 
 
@@ -456,6 +457,11 @@ def _fmt_date_block(ws, sid, last_row, header_bg=HEADER_BG):
             "startColumnIndex": 5, "endColumnIndex": 6},
             "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}},
             "fields": "userEnteredFormat.numberFormat"}},
+        # СПП — светло-зелёная заливка ТОЛЬКО ячеек с цифрами (строки данных, шапки не трогаем)
+        {"repeatCell": {"range": {"sheetId": sid, "startRowIndex": 2, "endRowIndex": last_row,
+            "startColumnIndex": 5, "endColumnIndex": 6},
+            "cell": {"userEnteredFormat": {"backgroundColor": SPP_GREEN}},
+            "fields": "userEnteredFormat.backgroundColor"}},
         # ширины: цены 73, СПП 55
         {"updateDimensionProperties": {"range": {"sheetId": sid, "dimension": "COLUMNS",
             "startIndex": 2, "endIndex": 5}, "properties": {"pixelSize": 73}, "fields": "pixelSize"}},
