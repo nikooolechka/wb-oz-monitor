@@ -27,6 +27,7 @@
     "irrigator_new_05",
     "irrigator_new_1",
     "makeup_30",
+    "makeup_50",
     "spray_hedonisme",
     "spraydlyapolostyrta",
     "ФБС",
@@ -259,6 +260,10 @@
     "ВБ|тест 1": {
       "ref": "5х5х14",
       "last": "10х10х18"
+    },
+    "ВБ|makeup_50": {
+      "ref": "11х6х14",
+      "last": "11х6х14"
     }
   }
 }
