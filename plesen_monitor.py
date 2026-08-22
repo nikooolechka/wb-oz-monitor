@@ -28,6 +28,12 @@ RESET = 3          # ниже этого за 14 дней — снова гот�
 WINDOW_DAYS = 14
 MOLD_RE = re.compile(r"плесен|плеснев|заплесн|гнил|протух|тухл", re.IGNORECASE)
 
+# Ozon-плесень читаем из АРХИВА reviews_ozon (сбор — на удалённом ПК; из облака
+# антибот Ozon режет, а чтение таблицы работает всегда). Вкладка reviews_ozon,
+# колонки: A=id, B=платформа, C=артикул, D=дата(ГГГГ-ММ-ДД), E=звёзды, F=плюсы, G=минусы, H=текст.
+OZ_ARCHIVE_SHEET = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"
+OZ_ARCHIVE_TAB = "reviews_ozon"
+
 # Ozon: мониторим ВСЕ дентал-салфетки (список тянется динамически из Seller API,
 # чтобы автоматически подхватывать новые). WB и так ловит все товары через feedbacks.
 CTX = ssl._create_unverified_context()
@@ -190,6 +196,41 @@ def oz_mold():
     return out
 
 
+def oz_mold_from_archive():
+    """Ozon-плесень из архива reviews_ozon (облачное чтение таблицы, антибот не мешает)."""
+    sa_raw = os.environ.get("GSHEETS_SA_JSON", "").strip()
+    if not sa_raw:
+        print("нет GSHEETS_SA_JSON — Ozon-плесень из архива пропущена")
+        return []
+    try:
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        cred = Credentials.from_service_account_info(
+            json.loads(sa_raw), scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"])
+        svc = build("sheets", "v4", credentials=cred, cache_discovery=False)
+        rows = svc.spreadsheets().values().get(
+            spreadsheetId=OZ_ARCHIVE_SHEET,
+            range=f"{OZ_ARCHIVE_TAB}!A2:I100000").execute().get("values", [])
+    except Exception as e:
+        print("Ozon-архив read err:", str(e)[:120])
+        return []
+    out = []
+    for r in rows:
+        r = list(r) + [""] * (9 - len(r))
+        rid = str(r[0]).strip()
+        blob = " ".join([str(r[7]), str(r[5]), str(r[6])])  # текст + плюсы + минусы
+        if rid and MOLD_RE.search(blob):
+            try:
+                score = int(str(r[4]).strip()) if str(r[4]).strip() else None
+            except ValueError:
+                score = None
+            out.append({"id": rid if rid.startswith("oz_") else "oz_" + rid,
+                        "platform": "Ozon", "product": (r[2] or "?"),
+                        "date": str(r[3]).strip(), "score": score})
+    print("Ozon-плесень из архива:", len(out))
+    return out
+
+
 def main():
     st = state.load()
     node = st.get("plesen") or {}
@@ -198,12 +239,12 @@ def main():
     alerted = node.get("alerted", False)
     initialized = node.get("initialized", False)
 
-    # Ozon отключён (решение владельца 2026-07-09): из облака Azure-IP режется антиботом,
-    # бесплатного обхода нет → монитор WB-only. Код oz_mold сохранён; включается флагом
-    # PLESEN_OZON=1 (если появится резидентный/РФ egress — VPS/Oracle).
+    # Ozon вернулся в монитор (2026-08-21): читаем его плесень из АРХИВА reviews_ozon
+    # (сбор на ПК; из облака антибот режет прямой скрейп — потому старый oz_mod через
+    # composer отключён, живёт как резерв). PLESEN_OZON=0 — аварийно выключить Ozon.
     found = wb_mold()
-    if os.environ.get("PLESEN_OZON") == "1":
-        found += oz_mold()
+    if os.environ.get("PLESEN_OZON") != "0":
+        found += oz_mold_from_archive()
     new = [f for f in found if f["id"] not in seen]
     for f in new:
         seen.add(f["id"])
@@ -212,10 +253,18 @@ def main():
         # первый прогон — помечаем текущие отзывы как известные, events НЕ копим
         # (иначе базовый уровень сработал бы как «волна» на след. запуске), алерт не шлём
         node.update({"seen": list(seen)[-5000:], "events": [],
-                     "alerted": False, "initialized": True})
+                     "alerted": False, "initialized": True, "oz_initialized": True})
         st["plesen"] = node; state.save(st)
         print(f"первичная инициализация: {len(new)} отзывов помечены как база, алерт не шлём")
         return
+
+    # Разовая базовая линия для Ozon: при ПЕРВОМ включении Ozon-архива его исторические
+    # плесневые отзывы уже попали в seen выше — исключаем их из НОВЫХ, чтобы не выдать
+    # ложную «волну» задним числом. Дальше новые Ozon-отзывы считаются нормально.
+    if not node.get("oz_initialized"):
+        new = [f for f in new if f["platform"] != "Ozon"]
+        node["oz_initialized"] = True
+        print("Ozon-плесень: разовая базовая линия из архива — этот прогон Ozon в волну не считаю")
 
     # дальше — копим ТОЛЬКО новые (появившиеся после инициализации), чистим старше 45 дней
     known_ids = {e["id"] for e in events}
