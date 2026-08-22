@@ -1,15 +1,15 @@
-name: Монитор плесени в отзывах (WB+Ozon → канал изменений)
+name: Сторож свежести архива отзывов Ozon
 
 on:
   schedule:
-    - cron: "0 8 */5 * *"    # раз в ~5 дней (числа 1,6,11,16,21,26,31), 08:00 UTC / 11:00 МСК
-  workflow_dispatch:          # ручной запуск для теста
+    - cron: "30 6 * * *"     # ежедневно 06:30 UTC / 09:30 МСК
+  workflow_dispatch:          # ручной запуск (вход DRY через env для теста)
 
 permissions:
   contents: write             # чтобы коммитить снимок состояния обратно
 
 concurrency:
-  group: plesen
+  group: oz-reviews-watchdog
   cancel-in-progress: false
 
 jobs:
@@ -22,23 +22,19 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Прогон монитора плесени
+      - name: Прогон сторожа свежести архива Ozon
         env:
-          WB_TOKEN: ${{ secrets.WB_TOKEN }}
-          OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
-          OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          STATE_PATH: data/plesen_state.json
-        run: python plesen_monitor.py
+        run: python oz_reviews_watchdog.py
       - name: Сохранить снимок обратно в репозиторий
         run: |
           git config user.name  "monitor-bot"
           git config user.email "monitor-bot@users.noreply.github.com"
-          git add data/plesen_state.json || true
+          git add data/oz_reviews_watchdog_state.json || true
           if ! git diff --cached --quiet; then
-            git commit -m "plesen state update [skip ci]"
+            git commit -m "oz reviews watchdog state [skip ci]"
             git push
           else
             echo "Снимок не изменился — коммит не нужен."
