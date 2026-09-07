@@ -35,7 +35,7 @@ WINDOW_HOURS = float(os.environ.get("POSTS_WINDOW_HOURS", "168"))
 PREVIEW = os.environ.get("POSTS_PREVIEW") == "1"
 MSK = timezone(timedelta(hours=3))
 PACE_SEC = float(os.environ.get("POSTS_PACE_SEC", "4.5"))  # раздаём запросы к Gemini под минутный лимит free-тарифа
-NOTHING_MSG = "Прогнал все каналы, сегодня ничего полезного🫡"
+NOTHING_MSG = "Прогнал все каналы, за вчера ничего полезного🫡"
 
 _ORDER = ["правила", "связка", "фишка", "кейс", "данные", "инструмент", "ресурс"]
 
