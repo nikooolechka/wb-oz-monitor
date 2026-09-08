@@ -29,6 +29,8 @@ jobs:
       - name: Прогон FBS-монитора (заказы по складам + Казань)
         env:
           WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
+          OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
