@@ -45,6 +45,19 @@ REQUIRE = [("ВБ", 1), ("Озон", 7), ("ЯМ", 14)]
 GID = 0
 # два скрина: (диапазон, подпись-нет) — подпись даём общую на альбом
 SCREENS = ["B1:M23", "O1:X23"]
+STATE_FILE = "data/price_screenshot_state.json"
+
+
+def _load_state():
+    try:
+        return json.load(open(STATE_FILE, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_state(st):
+    os.makedirs("data", exist_ok=True)
+    json.dump(st, open(STATE_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
 
 def _creds(scopes):
@@ -128,6 +141,11 @@ def main():
     if not DRY and not CHAT_ID:
         print("[screenshot] PRICES_SCREENSHOT_CHAT_ID не задан (чат отдела) — никуда не шлю", flush=True)
         return
+    # дедуп: один альбом на (день, окно) — чтобы ручной запуск и крон не прислали дважды
+    st = _load_state()
+    if not DRY and phase in st.get(today, []):
+        print(f"[screenshot] за окно {phase} {today} уже отправлено — пропуск (без дубля)", flush=True)
+        return
     notes = notes_row1()
 
     stale = []
@@ -161,6 +179,14 @@ def main():
                       files=files, timeout=120)
     d = r.json()
     print("[screenshot] отправлено:", d.get("ok"), "" if d.get("ok") else d)
+    if d.get("ok"):
+        st.setdefault(today, [])
+        if phase not in st[today]:
+            st[today].append(phase)
+        # чистим старые даты, храним последние ~7
+        for k in sorted(st.keys())[:-7]:
+            st.pop(k, None)
+        _save_state(st)
 
 
 if __name__ == "__main__":
