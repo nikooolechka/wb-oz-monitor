@@ -17,8 +17,8 @@
 Куда шлём: ЧАТ ОТДЕЛА (с коллегами) — НЕ личка и НЕ канал «изменения» (три разных
 места, не путать!). chat_id чата отдела = секрет PRICES_SCREENSHOT_CHAT_ID; пока
 он не задан — НЕ шлём никуда. Бот @asfarm_changes_bot должен быть участником чата.
-Отправка ТИХАЯ (disable_notification). Выходные (сб/вс) — только утренний 10:30,
-вечерний не шлём.
+Будни (пн–пт): 10:30 и 17:30, СО звуком. Выходные (сб/вс): только 10:30 и БЕЗ звука
+(disable_notification только в выходные).
 
 Секреты/env: PRICES_SHEET_ID, GSHEETS_SA_JSON, TELEGRAM_BOT_TOKEN,
 PRICES_SCREENSHOT_CHAT_ID (chat_id чата отдела). DRY=1 — проверить и собрать, НЕ слать.
@@ -173,9 +173,10 @@ def main():
     files = {f"p{i}": p for i, p in enumerate(photos)}
     media = [{"type": "photo", "media": f"attach://p{i}", **({"caption": cap} if i == 0 else {})}
              for i in range(len(photos))]
+    silent = "true" if now.weekday() >= 5 else "false"   # без звука ТОЛЬКО в выходные; будни — со звуком
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup",
                       data={"chat_id": CHAT_ID, "media": json.dumps(media, ensure_ascii=False),
-                            "disable_notification": "true"},   # тихо, без звука
+                            "disable_notification": silent},
                       files=files, timeout=120)
     d = r.json()
     print("[screenshot] отправлено:", d.get("ok"), "" if d.get("ok") else d)
