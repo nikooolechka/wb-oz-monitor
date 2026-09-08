@@ -11,7 +11,7 @@
     ОДНО сообщение в канал «АС Фарм изменения». Для Озон-разлогина — отдельный текст.
 Дедуп: максимум одно сообщение на маркет в день (data/price_watchdog_state.json).
 """
-import os, json, urllib.request, urllib.parse
+import os, json, time, re, urllib.request, urllib.parse
 from datetime import datetime, timezone, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -28,6 +28,11 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 GH_REPO = os.environ.get("GITHUB_REPOSITORY", "nikooolechka/wb-oz-monitor")
 GH_TOKEN = os.environ.get("GH_PAT") or os.environ.get("GITHUB_TOKEN", "")
 STATE_FILE = "data/price_watchdog_state.json"
+
+# Пульт облачного агента на удалённом ПК (вкладка Лист1 таблицы «АС ФАРМ клод код»):
+# A2=команда (пишем RUN), A3=статус (ждём «RUN done»), A4=heartbeat («alive ДАТА»).
+# Через него сторож САМ чинит несвежие цены, не дёргая владельца.
+PULT_ID = os.environ.get("PULT_SHEET_ID", "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms")
 
 # маркет -> индекс столбца (0-based) ячейки-заголовка в строке 1 Лист1
 MARKETS = [("WB", 1), ("ОЗОН", 7), ("ЯМ", 14), ("ДМ", 20)]
@@ -93,6 +98,60 @@ def _redispatch_wb():
     except Exception as e:
         print("[watchdog] re-dispatch не удался:", e, flush=True)
 
+def _pult_svc():
+    cred = Credentials.from_service_account_info(
+        SA, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    return build("sheets", "v4", credentials=cred, cache_discovery=False).spreadsheets().values()
+
+def _agent_alive():
+    """(жив, heartbeat-строка). Агент штампует A4 «alive YYYY-MM-DD HH:MM:SS» ~каждые 2 мин."""
+    try:
+        v = _pult_svc().get(spreadsheetId=PULT_ID, range="Лист1!A4").execute().get("values", [])
+        hb = v[0][0] if v and v[0] else ""
+        m = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", hb)
+        if not m:
+            return False, hb
+        t = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=MSK)
+        return (datetime.now(MSK) - t) < timedelta(minutes=15), hb
+    except Exception as e:
+        print("[watchdog] heartbeat недоступен:", e, flush=True)
+        return False, ""
+
+def _agent_run(wait_min=12):
+    """Пишем RUN на пульт агента ПК, ждём «RUN done» (~8-10 мин прогон). True если дождались."""
+    val = _pult_svc()
+    try:
+        val.update(spreadsheetId=PULT_ID, range="Лист1!A2",
+                   valueInputOption="RAW", body={"values": [["RUN"]]}).execute()
+        print("[watchdog] отправил RUN агенту ПК, жду завершения…", flush=True)
+        done = False
+        for _ in range(wait_min * 6):
+            time.sleep(10)
+            v = val.get(spreadsheetId=PULT_ID, range="Лист1!A3").execute().get("values", [])
+            a3 = v[0][0] if v and v[0] else ""
+            if "RUN done" in a3:
+                print("[watchdog] агент отчитался:", a3, flush=True)
+                done = True
+                break
+        val.update(spreadsheetId=PULT_ID, range="Лист1!A2",
+                   valueInputOption="RAW", body={"values": [[""]]}).execute()  # снять команду
+        return done
+    except Exception as e:
+        print("[watchdog] команда RUN не удалась:", e, flush=True)
+        return False
+
+def _recount(notes, today):
+    stale, logout = [], []
+    for name, c in MARKETS:
+        note = notes.get(c, "")
+        if not note:
+            continue
+        if ("LOGOUT" in note) and (today in note):
+            logout.append(name)
+        elif today not in note:
+            stale.append(name)
+    return stale, logout
+
 def run():
     now = datetime.now(MSK)
     today = now.strftime("%Y-%m-%d")
@@ -103,23 +162,29 @@ def run():
         st = {"date": today, "alerted": []}
     col = {m: c for m, c in MARKETS}
 
-    stale = []      # маркеты, не обновлённые сегодня
-    logout = []     # Озон разлогинен сегодня
+    stale, logout = _recount(notes, today)
     for name, c in MARKETS:
-        note = notes.get(c, "")
-        if not note:
-            print(f"[watchdog] {name}: примечания нет (парсер ещё не штамповал) — пропуск", flush=True)
-            continue  # базы ещё нет — не тревожим
-        fresh = today in note
-        is_logout = ("LOGOUT" in note) and (today in note)
-        print(f"[watchdog] {name}: fresh={fresh} logout={is_logout} note={note!r}", flush=True)
-        if is_logout:
-            logout.append(name)
-        elif not fresh:
-            stale.append(name)
+        print(f"[watchdog] {name}: note={notes.get(c,'')!r}", flush=True)
+
+    # --- АВТО-РЕМОНТ через агента ПК (обе фазы) ---
+    # Несвежесть (не из-за разлогина) чиним сами: если агент ПК жив — командуем RUN,
+    # ждём и перечитываем штампы. Владельца дёргаем только если и это не помогло.
+    agent_hb = ""
+    if stale:
+        alive, agent_hb = _agent_alive()
+        if alive:
+            print(f"[watchdog] несвежие {stale}: агент ПК жив ({agent_hb}) → RUN", flush=True)
+            if _agent_run():
+                notes = _notes()
+                stale, logout = _recount(notes, today)
+                print(f"[watchdog] после RUN: stale={stale} logout={logout}", flush=True)
+            else:
+                print("[watchdog] RUN не дал «done» вовремя", flush=True)
+        else:
+            print(f"[watchdog] несвежие {stale}, агент ПК не отвечает (hb={agent_hb!r}) — RUN не шлю", flush=True)
 
     if phase == "early":
-        # самопочинка: только ВБ (облачный). Озон/ЯМ на компе — ждут 13:00.
+        # облачный фолбэк для ВБ, если авто-ремонт не помог (или агент офлайн)
         if "WB" in stale:
             _redispatch_wb()
         print("[watchdog] ранняя фаза: чиню, не алертю", flush=True)
@@ -144,7 +209,14 @@ def run():
         bad = bool(logout or stale)
         head = ("<b>⚠️ Цены: сегодня обновились НЕ все</b>" if bad
                 else "<b>✅ Цены собраны сегодня — все маркеты</b>")
-        tail = "\n\nНиколь, зайди пожалуйста — починим." if bad else ""
+        # если несвежесть осталась и агент ПК не отвечал — вероятно, ПК/агент офлайн
+        pc_off = bool(stale) and not _agent_alive()[0]
+        if bad and pc_off:
+            tail = "\n\n⚠️ Агент на ПК не отвечает — автопочинка не сработала. Николь, проверь ПК."
+        elif bad:
+            tail = "\n\nАвтопочинка (RUN на ПК) не помогла. Николь, зайди пожалуйста — починим."
+        else:
+            tail = ""
         _tg(head + "\n" + "\n".join(lines) + tail)
         st.setdefault("alerted", []).append("digest")
         print("[watchdog] дайджест отправлен:", "СБОЙ" if bad else "всё ок", flush=True)
