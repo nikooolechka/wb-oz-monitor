@@ -1,0 +1,47 @@
+name: FBS-заказы по складам + ловля Казани (ежедневно)
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # 06:30 МСК — вчера уже полностью закрыт
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = только лог, без записи в таблицу и без канала"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fbs-kazan
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Прогон FBS-монитора (заказы по складам + Казань)
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: python fbs_kazan_monitor.py
+      - name: Сохранить состояние (дедуп алертов Казани)
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/fbs_kazan_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "fbs kazan state [skip ci]"
+            git push
+          else
+            echo "состояние не изменилось"
+          fi
