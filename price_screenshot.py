@@ -14,9 +14,14 @@
 Скрин = PDF-экспорт диапазона Лист1 → PNG (реальное форматирование), автообрезка
 сносок-примечаний. Всё из облака, без ПК/браузера.
 
-Секреты/env: PRICES_SHEET_ID, GSHEETS_SA_JSON, TELEGRAM_BOT_TOKEN (бот, знающий
-личку владельца — @asfarm_changes_bot), PRICES_SCREENSHOT_CHAT_ID (личный chat_id;
-дефолт 339473235). DRY=1 — только проверить свежесть и собрать скрины, НЕ слать.
+Куда шлём: ЧАТ ОТДЕЛА (с коллегами) — НЕ личка и НЕ канал «изменения» (три разных
+места, не путать!). chat_id чата отдела = секрет PRICES_SCREENSHOT_CHAT_ID; пока
+он не задан — НЕ шлём никуда. Бот @asfarm_changes_bot должен быть участником чата.
+Отправка ТИХАЯ (disable_notification). Выходные (сб/вс) — только утренний 10:30,
+вечерний не шлём.
+
+Секреты/env: PRICES_SHEET_ID, GSHEETS_SA_JSON, TELEGRAM_BOT_TOKEN,
+PRICES_SCREENSHOT_CHAT_ID (chat_id чата отдела). DRY=1 — проверить и собрать, НЕ слать.
 """
 import os, io, re, json, ssl, urllib.parse, urllib.request
 from datetime import datetime, timezone, timedelta
@@ -32,7 +37,7 @@ MSK = timezone(timedelta(hours=3))
 SHEET = os.environ["PRICES_SHEET_ID"]
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-CHAT_ID = os.environ.get("PRICES_SCREENSHOT_CHAT_ID", "339473235").strip()
+CHAT_ID = os.environ.get("PRICES_SCREENSHOT_CHAT_ID", "").strip()  # чат ОТДЕЛА; пусто → не шлём
 DRY = os.environ.get("DRY") == "1"
 
 # маркеты, чью свежесть ТРЕБУЕМ для отправки (основной прогон ПК): столбец-заголовок 0-based
@@ -116,6 +121,13 @@ def main():
     now = datetime.now(MSK)
     today = now.strftime("%Y-%m-%d")
     phase = "morning" if now.hour < 14 else "evening"
+    # выходные (сб=5, вс=6): вечерний скрин НЕ шлём, только утренний 10:30
+    if phase == "evening" and now.weekday() >= 5:
+        print("[screenshot] выходной — вечерний скрин не шлём (только 10:30)", flush=True)
+        return
+    if not DRY and not CHAT_ID:
+        print("[screenshot] PRICES_SCREENSHOT_CHAT_ID не задан (чат отдела) — никуда не шлю", flush=True)
+        return
     notes = notes_row1()
 
     stale = []
@@ -144,7 +156,8 @@ def main():
     media = [{"type": "photo", "media": f"attach://p{i}", **({"caption": cap} if i == 0 else {})}
              for i in range(len(photos))]
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup",
-                      data={"chat_id": CHAT_ID, "media": json.dumps(media, ensure_ascii=False)},
+                      data={"chat_id": CHAT_ID, "media": json.dumps(media, ensure_ascii=False),
+                            "disable_notification": "true"},   # тихо, без звука
                       files=files, timeout=120)
     d = r.json()
     print("[screenshot] отправлено:", d.get("ok"), "" if d.get("ok") else d)
