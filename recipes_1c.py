@@ -285,7 +285,7 @@ def _cell_req(sheet_id, ridx, col, value, level):
     Прочие свойства ячейки (границы, выравнивание) и высота строки не трогаются."""
     fmt = {
         "textFormat": {"fontSize": 7},
-        "wrapStrategy": "OVERFLOW",
+        "wrapStrategy": "OVERFLOW_CELL",
     }
     mask = "userEnteredValue,userEnteredFormat.textFormat.fontSize,userEnteredFormat.wrapStrategy"
     if level is not None:
