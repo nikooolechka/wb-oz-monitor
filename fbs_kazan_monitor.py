@@ -39,7 +39,7 @@ MP = "https://marketplace-api.wildberries.ru"
 CONTENT = "https://content-api.wildberries.ru"
 START = datetime(2026, 8, 1, tzinfo=timezone(timedelta(hours=3)))  # начало периода
 MSK = timezone(timedelta(hours=3))
-FIRST_ROW = 70          # таблица начинается со строки 70
+FIRST_ROW = 65          # таблица начинается со строки 65 (владелец удалила лишние строки вверху 08.09)
 STATE_FILE = "data/fbs_kazan_state.json"
 DRY = os.environ.get("DRY") == "1"
 
