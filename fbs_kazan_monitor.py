@@ -1,32 +1,30 @@
-"""Монитор FBS-заказов по складам (по дням): WB + Ozon, в одну вкладку FBS.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Монитор FBS-заказов по складам (по дням) + артикульная разбивка, WB + Ozon.
 
-Что делает каждый прогон (раз в сутки, УТРОМ по МСК):
-  1. WB: список FBS-складов (/api/v3/warehouses) — Краснодар (1884480),
-     МП Карго Софьино (2033332), Казань (распознаётся по «казан» в названии,
-     id подхватывается сам). Заказы — /api/v3/orders по дням и по складам.
-  2. Ozon: FBS-отправления (/v3/posting/fbs/list) по дням и по складам
-     (штуки = сумма quantity товаров в отправлении).
-  3. Пишет ДВА блока во вкладку FBS (ОП АС Фарм), оба со строки 65:
-       - WB  — со столбца B: Дата / Краснодар / МП Карго Софьино / Казань / Итого;
-       - Ozon — со столбца I: Дата / <склады FBS Ozon> / Итого.
-     Период: с 01.08.2026 ПО ВЧЕРА включительно (МСК). Сегодняшний день НЕ пишем —
-     он не закончился, цифра неточная (требование владельца).
-  4. Ловит приход товара в Казань и шлёт разовые алерты в канал
-     «АС Фарм изменения» (дедуп через data/fbs_kazan_state.json):
-       - склад Казань впервые появился в кабинете WB;
-       - на складе Казань впервые появился остаток FBS (товар приехал);
-       - из Казани впервые поехал FBS-заказ.
+Каждый прогон (ежедневно, УТРОМ по МСК; запуск с Яндекс-таймера prices-trigger,
+крон GitHub — дублёр):
+  1. WB: FBS-склады (/api/v3/warehouses) — Краснодар 1884480, МП Карго Софьино
+     2033332, Казань (по «казан» в названии). Заказы /api/v3/orders: по дням,
+     складам И артикулам (article), 1 заказ = 1 шт.
+  2. Ozon: FBS-отправления /v3/posting/fbs/list: по дням, складам и артикулам
+     (offer_id), штуки = сумма quantity.
+  3. Пишет во вкладку FBS (ОП АС Фарм) со строки 65: два блока рядом —
+     WB (B: Дата/Краснодар/Софьино/Казань/Итого), Ozon (I: Дата/склады/Итого).
+     Период 01.08.2026 → ВЧЕРА (сегодня неполный не пишем).
+     ВЛОЖЕННЫЕ ГРУППЫ (плюсики): месяц ▸ дни ▸ артикулы. По умолчанию ВСЁ
+     свёрнуто до месяцев (видны итоги месяцев + ВСЕГО). Разбивка по артикулам —
+     ОБЩИЙ список на дату для обоих маркетов, вписываются только проданные.
+     ⚠️ Группы трогаем ТОЛЬКО в своей зоне (строки >= 65) — верхний блок владельца
+     (группы на строках 2–33 и 36–63) НЕ трогать.
+  4. Ловит приход товара в Казань → алерт в канал «АС Фарм изменения» (дедуп).
 
 Секреты: WB_TOKEN, OZON_CLIENT_ID, OZON_API_KEY, GSHEETS_SA_JSON,
-TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. DRY=1 → только лог, ничего не пишем/не шлём.
+TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. DRY=1 — только лог.
 """
 from __future__ import annotations
 
-import os
-import json
-import time
-import ssl
-import urllib.request
+import os, json, time, ssl, re, urllib.request
 from datetime import datetime, timedelta, timezone
 
 import gspread
@@ -40,11 +38,12 @@ TAB = "FBS"
 MP = "https://marketplace-api.wildberries.ru"
 CONTENT = "https://content-api.wildberries.ru"
 OZ = "https://api-seller.ozon.ru"
-START = datetime(2026, 8, 1, tzinfo=timezone(timedelta(hours=3)))  # начало периода
+START = datetime(2026, 8, 1, tzinfo=timezone(timedelta(hours=3)))
 MSK = timezone(timedelta(hours=3))
-FIRST_ROW = 65          # оба блока начинаются со строки 65 (владелец удалила лишние строки вверху 08.09)
-WB_COL = 2              # блок WB со столбца B
-OZ_COL = 9              # блок Ozon со столбца I
+FIRST_ROW = 65
+MYZONE_START0 = 64          # 0-индекс: группы трогаем только начиная с этой строки (строка 65)
+WB_COL = 2                  # B
+OZ_COL = 9                  # I
 STATE_FILE = "data/fbs_kazan_state.json"
 DRY = os.environ.get("DRY") == "1"
 
@@ -91,7 +90,6 @@ def _oz(path, body):
         "Content-Type": "application/json"})
 
 
-# ---------- WB склады ----------
 def wb_warehouses():
     wh = _get(f"{MP}/api/v3/warehouses")
     kazan = None
@@ -101,11 +99,14 @@ def wb_warehouses():
     return wh, kazan
 
 
-# ---------- WB заказы по дням ----------
-def wb_orders_by_day(date_to):
-    """{'YYYY-MM-DD': {wid: units}} за [START, date_to). WB: 1 заказ = 1 шт."""
-    data = {}
-    seen = set()
+def end_stop():
+    return datetime.now(MSK).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+# ---------- WB заказы: по дням / складам / артикулам ----------
+def wb_detailed(date_to):
+    """data[ds][article][wid] = шт (1 заказ = 1 шт)."""
+    data, seen = {}, set()
     now_to = int(date_to.timestamp())
     cur = START
     while cur.timestamp() < now_to:
@@ -124,9 +125,10 @@ def wb_orders_by_day(date_to):
                 if dt < START or dt >= date_to:
                     continue
                 ds = dt.strftime("%Y-%m-%d")
-                data.setdefault(ds, {})
+                art = (o.get("article") or str(o.get("nmId") or "?")).strip()
                 wid = o.get("warehouseId")
-                data[ds][wid] = data[ds].get(wid, 0) + 1
+                data.setdefault(ds, {}).setdefault(art, {})
+                data[ds][art][wid] = data[ds][art].get(wid, 0) + 1
             nxt = d.get("next", 0)
             if not orders or not nxt:
                 break
@@ -135,10 +137,9 @@ def wb_orders_by_day(date_to):
     return data
 
 
-# ---------- Ozon FBS-отправления по дням ----------
-def oz_orders_by_day(date_to):
-    """({'YYYY-MM-DD': {wid: units}}, {wid: name}) за [START, date_to).
-    Штуки = сумма quantity товаров в каждом FBS-отправлении."""
+# ---------- Ozon отправления: по дням / складам / артикулам ----------
+def oz_detailed(date_to):
+    """(data[ds][article][wid]=шт, {wid:name})."""
     data, names = {}, {}
     since = START.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     to = date_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -146,8 +147,7 @@ def oz_orders_by_day(date_to):
     for _ in range(100):
         r = _oz("/v3/posting/fbs/list", {
             "dir": "asc", "filter": {"since": since, "to": to, "status": ""},
-            "limit": 1000, "offset": offset,
-            "with": {"analytics_data": False, "financial_data": False}})
+            "limit": 1000, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
         ps = r.get("result", {}).get("postings", [])
         for p in ps:
             ca = p.get("created_at") or p.get("in_process_at")
@@ -160,9 +160,11 @@ def oz_orders_by_day(date_to):
             dm = p.get("delivery_method", {}) or {}
             wid = dm.get("warehouse_id")
             names[wid] = dm.get("warehouse") or str(wid)
-            units = sum(int(pr.get("quantity", 0) or 0) for pr in p.get("products", []))
-            data.setdefault(ds, {})
-            data[ds][wid] = data[ds].get(wid, 0) + units
+            for pr in p.get("products", []):
+                art = (pr.get("offer_id") or "?").strip()
+                q = int(pr.get("quantity", 0) or 0)
+                data.setdefault(ds, {}).setdefault(art, {})
+                data[ds][art][wid] = data[ds][art].get(wid, 0) + q
         if len(ps) < 1000:
             break
         offset += 1000
@@ -170,15 +172,13 @@ def oz_orders_by_day(date_to):
     return data, names
 
 
-# ---------- остаток FBS по Казани (WB) ----------
 def kazan_stock(kazan_id):
-    """Сумма остатков FBS на складе Казань. None — если не смогли получить."""
     try:
         barcodes = []
         cursor = {"limit": 1000}
         for _ in range(30):
-            body = {"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}}
-            d = _post(f"{CONTENT}/content/v2/get/cards/list", body)
+            d = _post(f"{CONTENT}/content/v2/get/cards/list",
+                      {"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}})
             cards = d.get("cards", [])
             for c in cards:
                 for s in c.get("sizes", []):
@@ -192,8 +192,7 @@ def kazan_stock(kazan_id):
         barcodes = list({b for b in barcodes if b})
         total = 0
         for i in range(0, len(barcodes), 1000):
-            chunk = barcodes[i:i + 1000]
-            st = _post(f"{MP}/api/v3/stocks/{kazan_id}", {"skus": chunk})
+            st = _post(f"{MP}/api/v3/stocks/{kazan_id}", {"skus": barcodes[i:i + 1000]})
             for s in st.get("stocks", []):
                 total += s.get("amount", 0) or 0
             time.sleep(0.3)
@@ -203,7 +202,10 @@ def kazan_stock(kazan_id):
         return None
 
 
-# ---------- Sheets ----------
+def _norm(a):
+    return re.sub(r"[^a-z0-9]", "", (a or "").lower())
+
+
 def _sheet():
     info = json.loads(os.environ["GSHEETS_SA_JSON"])
     creds = Credentials.from_service_account_info(
@@ -211,61 +213,195 @@ def _sheet():
     return gspread.authorize(creds).open_by_key(OP_SHEET)
 
 
-def end_stop():
-    """Сегодня 00:00 МСК = граница (последний записанный день — вчера)."""
-    return datetime.now(MSK).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def build_block(day_data, columns, title, subtitle):
-    """columns = [(wid, 'Имя'), ...]. Возвращает (rows, subtotal_rows, total_row).
-    Строки строятся тем же периодом, что и второй блок → индексы совпадают."""
+def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
+    """Строит матрицу B..K + список групп. Возвращает (rows, groups, totals, end)."""
     end = end_stop()
-    wids = [c[0] for c in columns]
-    names = [c[1] for c in columns]
-    ncol = len(columns)
-    rows = [[title] + [""] * (ncol + 1),
-            [subtitle] + [""] * (ncol + 1),
-            ["Дата"] + names + ["Итого"]]
+    wb_whs = [(KRASNODAR, "Краснодар"), (SOFINO, "МП Карго Софьино"), (kazan_id, "Казань")]
+    wb_names = [n for _, n in wb_whs]
+    ncols_wb = len(wb_whs)                    # 3
+    # ширина: B..F (5) для WB, разрыв G,H, затем Ozon I.. (1 + n_oz + Итого)
+    OZW = OZ_COL                              # 9 = I
+    n_oz = max(1, len(oz_wids))
+    oz_list = oz_wids if oz_wids else [None]
+    oz_wnames = [oz_names.get(w, "FBS Краснодар") for w in oz_list]
+    total_cols = (OZW - 1) + 1 + n_oz + 1     # до Ozon-Итого включительно, 1-индекс последней колонки
+    W = total_cols                            # число колонок в строке (B..last)
+
+    def blank_row():
+        return [""] * W
+
+    def put(row, col1, val):                  # col1 — 1-индекс листа; B=2 → индекс 0
+        row[col1 - 2] = val
+
+    def wb_cells(row, label, per_wh, total):
+        put(row, 2, label)
+        for i, (wid, _) in enumerate(wb_whs):
+            v = per_wh.get(wid, 0) if per_wh else 0
+            put(row, 3 + i, v)
+        put(row, 2 + ncols_wb + 1, total)     # F
+    def oz_cells(row, label, per_wh, total):
+        put(row, OZW, label)
+        for i, wid in enumerate(oz_list):
+            put(row, OZW + 1 + i, (per_wh.get(wid, 0) if per_wh else 0))
+        put(row, OZW + 1 + n_oz, total)
+
+    # шапка
+    rows = []
+    hdr_title = blank_row(); put(hdr_title, 2, "ЗАКАЗЫ FBS ПО ДНЯМ (ШТ) · WB + OZON")
+    rows.append(hdr_title)
+    sub = blank_row(); put(sub, 2, f"с 01.08.2026 · {stamp} · плюсики: месяц ▸ дни ▸ артикулы")
+    rows.append(sub)
+    head = blank_row()
+    put(head, 2, "Дата");
+    for i, n in enumerate(wb_names): put(head, 3 + i, n)
+    put(head, 2 + ncols_wb + 1, "Итого")
+    put(head, OZW, "Дата")
+    for i, n in enumerate(oz_wnames): put(head, OZW + 1 + i, n)
+    put(head, OZW + 1 + n_oz, "Итого")
+    rows.append(head)
+
     days = []
     d = START
     while d < end:
         days.append(d); d += timedelta(days=1)
-    subtotal_rows, totals = [], [0] * ncol
-    msum = {}
-    r_idx = FIRST_ROW + 3
+
+    groups = []            # {start,end,depth,collapsed} 1-индекс строк листа
+    subtotal_rows, total_rows_for_month = [], []
+    grand = {"wb": [0] * ncols_wb, "oz": [0] * n_oz}
+    r = FIRST_ROW + 3      # первая строка данных (после шапки)
+    day_rows_meta = []     # для стилей: какие строки — дни, какие — артикулы
     prev_month = None
+    month_block_start = None
+    month_sum = None
+
+    def flush_month(m):
+        nonlocal month_sum, month_block_start
+        wb_t = month_sum["wb"]; oz_t = month_sum["oz"]
+        mrow = blank_row()
+        wb_cells(mrow, f"Итого {MONTHS_RU[m]}", {wb_whs[i][0]: wb_t[i] for i in range(ncols_wb)}, sum(wb_t))
+        oz_cells(mrow, f"Итого {MONTHS_RU[m]}", {oz_list[i]: oz_t[i] for i in range(n_oz)}, sum(oz_t))
+        return mrow
+
     for d in days:
         if prev_month is not None and d.month != prev_month:
-            vals = msum[prev_month]
-            rows.append([f"Итого {MONTHS_RU[prev_month]}"] + vals + [sum(vals)])
-            subtotal_rows.append(r_idx); r_idx += 1
+            # закрыть месяц: строки month_block_start..r-1 — группа depth1 (свёрнута), контроль на строке итога (ниже)
+            rows.append(flush_month(prev_month)); month_row = r
+            subtotal_rows.append(month_row)
+            if month_row - 1 >= month_block_start:
+                groups.append({"start": month_block_start, "end": month_row - 1, "depth": 1, "collapsed": True})
+            r += 1
+            month_block_start = None; month_sum = None
+        if month_block_start is None:
+            month_block_start = r
+            month_sum = {"wb": [0] * ncols_wb, "oz": [0] * n_oz}
         prev_month = d.month
         ds = d.strftime("%Y-%m-%d")
-        wd = day_data.get(ds, {})
-        vals = [wd.get(w, 0) if w is not None else 0 for w in wids]
-        rows.append([f"{d:%d.%m.%Y} {WD[d.weekday()]}"] + vals + [sum(vals)])
-        totals = [t + v for t, v in zip(totals, vals)]
-        m = msum.get(d.month, [0] * ncol)
-        msum[d.month] = [a + b for a, b in zip(m, vals)]
-        r_idx += 1
+        wb_day = wb_data.get(ds, {})   # {article:{wid:q}}
+        oz_day = oz_data.get(ds, {})
+        # суммы дня
+        wb_wh_tot = {wid: 0 for wid, _ in wb_whs}
+        for art, perwh in wb_day.items():
+            for wid, q in perwh.items():
+                if wid in wb_wh_tot: wb_wh_tot[wid] += q
+        oz_wh_tot = {wid: 0 for wid in oz_list}
+        for art, perwh in oz_day.items():
+            for wid, q in perwh.items():
+                if wid in oz_wh_tot: oz_wh_tot[wid] += q
+        # объединённый список артикулов (union), только проданные
+        keys = {}
+        for art in wb_day: keys.setdefault(_norm(art), art)
+        for art in oz_day: keys.setdefault(_norm(art), art)
+        # строки артикулов (детализация) — ИДУТ ВЫШЕ строки-итога дня (контроль группы будет на итоге дня, ниже)
+        art_start = r
+        for k, disp in sorted(keys.items(), key=lambda kv: kv[1].lower()):
+            arow = blank_row()
+            # WB часть
+            wb_perwh = {}
+            wt = 0
+            for art, perwh in wb_day.items():
+                if _norm(art) == k:
+                    for wid, q in perwh.items():
+                        wb_perwh[wid] = wb_perwh.get(wid, 0) + q; wt += q
+            # Ozon часть
+            oz_perwh = {}; ot = 0
+            for art, perwh in oz_day.items():
+                if _norm(art) == k:
+                    for wid, q in perwh.items():
+                        oz_perwh[wid] = oz_perwh.get(wid, 0) + q; ot += q
+            put(arow, 2, "    " + disp)
+            for i, (wid, _) in enumerate(wb_whs):
+                put(arow, 3 + i, wb_perwh.get(wid, "") or ("" if wb_perwh.get(wid, 0) == 0 else wb_perwh[wid]))
+            put(arow, 2 + ncols_wb + 1, wt or "")
+            if ot > 0:
+                put(arow, OZW, "    " + disp)
+                for i, wid in enumerate(oz_list):
+                    put(arow, OZW + 1 + i, oz_perwh.get(wid, "") or ("" if oz_perwh.get(wid, 0) == 0 else oz_perwh[wid]))
+                put(arow, OZW + 1 + n_oz, ot or "")
+            rows.append(arow); day_rows_meta.append(("art", r)); r += 1
+        # строка-итог дня
+        drow = blank_row()
+        wb_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", wb_wh_tot, sum(wb_wh_tot.values()))
+        oz_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", oz_wh_tot, sum(oz_wh_tot.values()))
+        rows.append(drow); day_rows_meta.append(("day", r))
+        day_summary_row = r
+        r += 1
+        # группа артикулов depth2 (свёрнута), контроль на строке-итоге дня (ниже группы)
+        if day_summary_row - 1 >= art_start:
+            groups.append({"start": art_start, "end": day_summary_row - 1, "depth": 2, "collapsed": True})
+        # накопить месяц/итог
+        for i, (wid, _) in enumerate(wb_whs):
+            month_sum["wb"][i] += wb_wh_tot.get(wid, 0); grand["wb"][i] += wb_wh_tot.get(wid, 0)
+        for i, wid in enumerate(oz_list):
+            month_sum["oz"][i] += oz_wh_tot.get(wid, 0); grand["oz"][i] += oz_wh_tot.get(wid, 0)
+
     if prev_month is not None:
-        vals = msum[prev_month]
-        rows.append([f"Итого {MONTHS_RU[prev_month]}"] + vals + [sum(vals)])
-        subtotal_rows.append(r_idx); r_idx += 1
-    rows.append(["ВСЕГО за период"] + totals + [sum(totals)])
-    return rows, subtotal_rows, r_idx, names
+        rows.append(flush_month(prev_month)); month_row = r
+        subtotal_rows.append(month_row)
+        if month_row - 1 >= month_block_start:
+            groups.append({"start": month_block_start, "end": month_row - 1, "depth": 1, "collapsed": True})
+        r += 1
+    # ВСЕГО
+    grow = blank_row()
+    wb_cells(grow, "ВСЕГО за период", {wb_whs[i][0]: grand["wb"][i] for i in range(ncols_wb)}, sum(grand["wb"]))
+    oz_cells(grow, "ВСЕГО за период", {oz_list[i]: grand["oz"][i] for i in range(n_oz)}, sum(grand["oz"]))
+    rows.append(grow); total_row = r
+    meta = {"header": FIRST_ROW + 2, "subtotals": subtotal_rows, "total": total_row,
+            "day_rows": [rr for t, rr in day_rows_meta if t == "day"],
+            "art_rows": [rr for t, rr in day_rows_meta if t == "art"],
+            "last_col": W + 1, "ncols_wb": ncols_wb, "n_oz": n_oz}
+    return rows, groups, meta
 
 
-def write_block(sh, start_col, rows, subtotal_rows, total_row, names):
+def clear_my_groups(sh, sheet_id):
+    """Удаляет ВСЕ группы строк в моей зоне (startIndex>=64), верхние не трогает."""
+    for _ in range(20):
+        meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId,title),rowGroups(range,depth))"})
+        rgs = []
+        for sh_ in meta.get("sheets", []):
+            if sh_["properties"]["sheetId"] == sheet_id:
+                rgs = sh_.get("rowGroups", [])
+        mine = [g for g in rgs if g["range"].get("startIndex", 0) >= MYZONE_START0]
+        if not mine:
+            return
+        # удаляем самый глубокий первым
+        mine.sort(key=lambda g: g.get("depth", 1), reverse=True)
+        g = mine[0]
+        sh.batch_update({"requests": [{"deleteDimensionGroup": {"range": {
+            "sheetId": sheet_id, "dimension": "ROWS",
+            "startIndex": g["range"]["startIndex"], "endIndex": g["range"]["endIndex"]}}}]})
+
+
+def write_table(sh, rows, groups, meta):
     ws = sh.worksheet(TAB)
     sid = ws.id
-    ncols = len(names) + 2                      # Дата + склады + Итого
     last = FIRST_ROW + len(rows) - 1
-    a1 = lambda r, c: rowcol_to_a1(r, c)
-    # чистим прежний блок (с запасом вниз)
-    ws.batch_clear([f"{a1(FIRST_ROW, start_col)}:{a1(last + 40, start_col + ncols - 1)}"])
-    ws.update(f"{a1(FIRST_ROW, start_col)}:{a1(last, start_col + ncols - 1)}",
-              rows, value_input_option="RAW")
+    lastcol = meta["last_col"]
+    a = lambda rr, cc: rowcol_to_a1(rr, cc)
+    # 1) снять мои группы (иначе при сжатии строк собьются)
+    clear_my_groups(sh, sid)
+    # 2) чистим зону и пишем значения
+    ws.batch_clear([f"{a(FIRST_ROW, 2)}:{a(last + 400, lastcol)}"])
+    ws.update(f"{a(FIRST_ROW, 2)}:{a(last, lastcol)}", rows, value_input_option="RAW")
 
     dark = {"red": 0.13, "green": 0.28, "blue": 0.53}
     blue = {"red": 0.2, "green": 0.4, "blue": 0.66}
@@ -273,13 +409,12 @@ def write_block(sh, start_col, rows, subtotal_rows, total_row, names):
     yellow = {"red": 0.99, "green": 0.85, "blue": 0.4}
     beige = {"red": 1, "green": 0.97, "blue": 0.88}
     white = {"red": 1, "green": 1, "blue": 1}
-    grey = {"red": 0.35, "green": 0.35, "blue": 0.4}
-    hdr = FIRST_ROW + 2
-    c0, c1 = start_col, start_col + ncols - 1   # первая и последняя колонки блока
+    grey = {"red": 0.4, "green": 0.4, "blue": 0.45}
+    hdr = meta["header"]
 
-    def rng(r0, cc0, r1, cc1):
+    def rng(r0, c0, r1, c1):
         return {"sheetId": sid, "startRowIndex": r0 - 1, "endRowIndex": r1,
-                "startColumnIndex": cc0 - 1, "endColumnIndex": cc1}
+                "startColumnIndex": c0 - 1, "endColumnIndex": c1}
 
     def cell(bg=None, bold=False, fs=10, color=None, halign=None, valign=None, italic=False):
         tf = {"fontSize": fs, "bold": bold, "italic": italic}
@@ -290,42 +425,46 @@ def write_block(sh, start_col, rows, subtotal_rows, total_row, names):
         if valign: cf["verticalAlignment"] = valign
         return cf
 
-    def fmt(r0, cc0, r1, cc1, cf, fields="userEnteredFormat"):
-        return {"repeatCell": {"range": rng(r0, cc0, r1, cc1),
-                               "cell": {"userEnteredFormat": cf}, "fields": fields}}
+    def fmt(r0, c0, r1, c1, cf, fields="userEnteredFormat"):
+        return {"repeatCell": {"range": rng(r0, c0, r1, c1), "cell": {"userEnteredFormat": cf}, "fields": fields}}
 
-    reqs = [fmt(FIRST_ROW, c0, last, c1, cell(bg=white), "userEnteredFormat.backgroundColor")]
-    reqs.append(fmt(FIRST_ROW, c0, FIRST_ROW, c1,
-                    cell(bg=dark, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
-    reqs.append(fmt(FIRST_ROW + 1, c0, FIRST_ROW + 1, c1,
-                    cell(bg={"red": 0.9, "green": 0.93, "blue": 0.98}, fs=9, color=grey,
-                         halign="CENTER", valign="MIDDLE", italic=True)))
-    reqs.append(fmt(hdr, c0, hdr, c1, cell(bg=blue, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
-    reqs.append(fmt(hdr + 1, c0, last, c0, cell(halign="LEFT")))          # даты слева
-    reqs.append(fmt(hdr + 1, c0 + 1, last, c1, cell(halign="CENTER")))    # числа по центру
-    # колонка Казань (если есть) — бежевый фон
-    for i, nm in enumerate(names):
-        if nm == "Казань":
-            kc = start_col + 1 + i
-            reqs.append(fmt(hdr, kc, last - 1, kc, cell(bg=beige, halign="CENTER"),
-                            "userEnteredFormat.backgroundColor"))
-            reqs.append(fmt(hdr, kc, hdr, kc, cell(bg=blue, bold=True, color=white,
-                                                   halign="CENTER", valign="MIDDLE")))
-    reqs.append(fmt(hdr + 1, c1, last, c1, cell(bold=True), "userEnteredFormat.textFormat.bold"))
-    for r in subtotal_rows:
-        reqs.append(fmt(r, c0, r, c1, cell(bg=green, bold=True)))
-    reqs.append(fmt(total_row, c0, total_row, c1, cell(bg=yellow, bold=True, fs=11)))
-    reqs.append({"repeatCell": {"range": rng(hdr + 1, c0, last, c0),
-                                "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
-                                "fields": "userEnteredFormat.numberFormat"}})
+    B, L = 2, lastcol
+    reqs = [fmt(FIRST_ROW, B, last, L, cell(bg=white), "userEnteredFormat.backgroundColor")]
+    reqs.append(fmt(FIRST_ROW, B, FIRST_ROW, L, cell(bg=dark, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
+    reqs.append(fmt(FIRST_ROW + 1, B, FIRST_ROW + 1, L, cell(bg={"red": 0.9, "green": 0.93, "blue": 0.98}, fs=9, color=grey, halign="CENTER", valign="MIDDLE", italic=True)))
+    reqs.append(fmt(hdr, B, hdr, L, cell(bg=blue, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
+    # тело — числа по центру, метки слева
+    reqs.append(fmt(hdr + 1, B, last, B, cell(halign="LEFT")))
+    reqs.append(fmt(hdr + 1, 3, last, L, cell(halign="CENTER")))
+    reqs.append(fmt(hdr + 1, 3, last, 3 + meta["ncols_wb"], cell(halign="CENTER")))
+    # строки-дни — обычные; итоги месяца — зелёные жирные; ВСЕГО — жёлтый жирный
+    for rr in meta["subtotals"]:
+        reqs.append(fmt(rr, B, rr, L, cell(bg=green, bold=True)))
+    reqs.append(fmt(meta["total"], B, meta["total"], L, cell(bg=yellow, bold=True, fs=11)))
+    # строки-артикулы — мельче/серее
+    for rr in meta["art_rows"]:
+        reqs.append(fmt(rr, B, rr, L, cell(fs=9, color=grey)))
+    # даты (колонки-метки B и I) — текст, чтобы не превращались в числа
+    reqs.append({"repeatCell": {"range": rng(hdr + 1, B, last, B), "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}}, "fields": "userEnteredFormat.numberFormat"}})
+    reqs.append({"repeatCell": {"range": rng(hdr + 1, OZ_COL, last, OZ_COL), "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}}, "fields": "userEnteredFormat.numberFormat"}})
+    # границы всего блока
     solid = {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}}
     med = {"style": "SOLID_MEDIUM"}
-    reqs.append({"updateBorders": {"range": rng(FIRST_ROW, c0, last, c1),
-                                   "top": med, "bottom": med, "left": med, "right": med,
-                                   "innerHorizontal": solid, "innerVertical": solid}})
+    reqs.append({"updateBorders": {"range": rng(FIRST_ROW, B, last, L), "top": med, "bottom": med, "left": med, "right": med, "innerHorizontal": solid, "innerVertical": solid}})
     for rr in (FIRST_ROW, FIRST_ROW + 1):
-        reqs.append({"mergeCells": {"range": rng(rr, c0, rr, c1), "mergeType": "MERGE_ALL"}})
+        reqs.append({"mergeCells": {"range": rng(rr, B, rr, L), "mergeType": "MERGE_ALL"}})
     sh.batch_update({"requests": reqs})
+
+    # 3) группы (плюсики): сначала addDimensionGroup, потом collapsed
+    if groups:
+        addr = [{"addDimensionGroup": {"range": {"sheetId": sid, "dimension": "ROWS",
+                 "startIndex": g["start"] - 1, "endIndex": g["end"]}}} for g in groups]
+        sh.batch_update({"requests": addr})
+        upd = [{"updateDimensionGroup": {"dimensionGroup": {"range": {"sheetId": sid, "dimension": "ROWS",
+                "startIndex": g["start"] - 1, "endIndex": g["end"]}, "depth": g["depth"], "collapsed": True},
+                "fields": "collapsed"}} for g in groups if g["collapsed"]]
+        if upd:
+            sh.batch_update({"requests": upd})
 
 
 def load_state():
@@ -344,59 +483,35 @@ def main():
     st = load_state()
     end = end_stop()
     stamp = f"обновлено {datetime.now(MSK):%d.%m.%Y %H:%M} МСК"
-
-    # ---- WB ----
     _, kazan = wb_warehouses()
     kazan_id = kazan["id"] if kazan else st.get("kazan_id")
-    wb_data = wb_orders_by_day(end)
-    wb_cols = [(KRASNODAR, "Краснодар"), (SOFINO, "МП Карго Софьино"), (kazan_id, "Казань")]
-    wb_rows, wb_subs, wb_total, _ = build_block(
-        wb_data, wb_cols,
-        "ЗАКАЗЫ FBS ПО ДНЯМ (ШТ) · WB",
-        f"WB · с 01.08.2026 · {stamp} · источник: WB API /api/v3/orders")
-    kz_orders = sum(wb_data.get(d, {}).get(kazan_id, 0) for d in wb_data) if kazan_id else 0
+    wb_data = wb_detailed(end)
+    oz_data, oz_names = oz_detailed(end)
+    oz_wids = sorted([w for w in oz_names.keys()], key=lambda x: (x is None, x))
+    kz_orders = sum(sum(perwh.get(kazan_id, 0) for perwh in wb_data[ds].values()) for ds in wb_data) if kazan_id else 0
 
-    # ---- Ozon ----
-    oz_data, oz_names = oz_orders_by_day(end)
-    oz_wids = sorted(oz_names.keys(), key=lambda x: (x is None, x))
-    if not oz_wids:  # ещё не было ни одного FBS-отправления
-        oz_cols = [(None, "FBS Краснодар")]
-    else:
-        oz_cols = [(w, oz_names[w]) for w in oz_wids]
-    oz_rows, oz_subs, oz_total, _ = build_block(
-        oz_data, oz_cols,
-        "ЗАКАЗЫ FBS ПО ДНЯМ (ШТ) · OZON",
-        f"Ozon · с 01.08.2026 · {stamp} · источник: Seller API /v3/posting/fbs/list")
-
-    print(f"WB days→{(end - timedelta(days=1)):%d.%m.%Y}; Ozon складов: {[c[1] for c in oz_cols]}")
+    rows, groups, meta = build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp)
+    print(f"строк: {len(rows)} | групп: {len(groups)} | Ozon складов: {[oz_names[w] for w in oz_wids] or ['FBS Краснодар']}")
 
     if not DRY:
-        sh = _sheet()
-        write_block(sh, WB_COL, wb_rows, wb_subs, wb_total, [c[1] for c in wb_cols])
-        write_block(sh, OZ_COL, oz_rows, oz_subs, oz_total, [c[1] for c in oz_cols])
+        write_table(_sheet(), rows, groups, meta)
 
-    # ---------- алерты по Казани (WB) ----------
     alerts = []
     if kazan and not st.get("kazan_seen"):
-        st["kazan_seen"] = True
-        st["kazan_id"] = kazan["id"]
-        alerts.append(f"<b>WB: в кабинете появился FBS-склад «{kazan['name']}».</b>\n"
-                      f"Отслеживаю приход товара и заказы — колонка Казань в таблице FBS начнёт наполняться.")
+        st["kazan_seen"] = True; st["kazan_id"] = kazan["id"]
+        alerts.append(f"<b>WB: в кабинете появился FBS-склад «{kazan['name']}».</b>\nОтслеживаю приход товара и заказы.")
     if kazan_id and not st.get("kazan_stock_alerted"):
         stock = kazan_stock(kazan_id)
         if stock and stock > 0:
             st["kazan_stock_alerted"] = True
-            alerts.append(f"<b>Товар приехал на склад Казань (FBS): {stock} шт остатка.</b>\n"
-                          f"Склад {kazan_id} готов к заказам.")
+            alerts.append(f"<b>Товар приехал на склад Казань (FBS): {stock} шт остатка.</b>")
     if kazan_id and kz_orders > 0 and not st.get("kazan_order_alerted"):
         st["kazan_order_alerted"] = True
-        alerts.append(f"<b>Первый FBS-заказ из Казани.</b>\n"
-                      f"Всего по Казани уже {kz_orders} шт за период — колонка в таблице FBS обновлена.")
+        alerts.append(f"<b>Первый FBS-заказ из Казани.</b>\nВсего по Казани уже {kz_orders} шт за период.")
     for msg in alerts:
         print("ALERT:", msg.replace("\n", " / "))
         if not DRY:
             notify.send(msg); time.sleep(0.5)
-
     if not DRY:
         save_state(st)
 
