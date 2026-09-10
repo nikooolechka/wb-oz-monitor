@@ -328,12 +328,12 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
                 if _norm(art) == k:
                     for wid, q in perwh.items():
                         oz_perwh[wid] = oz_perwh.get(wid, 0) + q; ot += q
-            put(arow, 2, "    " + disp)
+            put(arow, 2, disp)
             for i, (wid, _) in enumerate(wb_whs):
                 put(arow, 3 + i, wb_perwh.get(wid, "") or ("" if wb_perwh.get(wid, 0) == 0 else wb_perwh[wid]))
             put(arow, 2 + ncols_wb + 1, wt or "")
             if ot > 0:
-                put(arow, OZW, "    " + disp)
+                put(arow, OZW, disp)
                 for i, wid in enumerate(oz_list):
                     put(arow, OZW + 1 + i, oz_perwh.get(wid, "") or ("" if oz_perwh.get(wid, 0) == 0 else oz_perwh[wid]))
                 put(arow, OZW + 1 + n_oz, ot or "")
@@ -373,22 +373,19 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
 
 
 def clear_my_groups(sh, sheet_id):
-    """Удаляет ВСЕ группы строк в моей зоне (startIndex>=64), верхние не трогает."""
-    for _ in range(20):
-        meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId,title),rowGroups(range,depth))"})
-        rgs = []
+    """Надёжно удаляет ВСЕ группы строк в моей зоне (startIndex>=64), верхние не трогает.
+    За проход сносим все группы самого глубокого уровня, повторяем пока не пусто."""
+    for _ in range(60):
+        meta = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),rowGroups(range,depth))"})
+        mine = []
         for sh_ in meta.get("sheets", []):
             if sh_["properties"]["sheetId"] == sheet_id:
-                rgs = sh_.get("rowGroups", [])
-        mine = [g for g in rgs if g["range"].get("startIndex", 0) >= MYZONE_START0]
+                mine = [g for g in sh_.get("rowGroups", []) if g["range"].get("startIndex", 0) >= MYZONE_START0]
         if not mine:
             return
-        # удаляем самый глубокий первым
-        mine.sort(key=lambda g: g.get("depth", 1), reverse=True)
-        g = mine[0]
-        sh.batch_update({"requests": [{"deleteDimensionGroup": {"range": {
-            "sheetId": sheet_id, "dimension": "ROWS",
-            "startIndex": g["range"]["startIndex"], "endIndex": g["range"]["endIndex"]}}}]})
+        maxd = max(g.get("depth", 1) for g in mine)
+        reqs = [{"deleteDimensionGroup": {"range": g["range"]}} for g in mine if g.get("depth", 1) == maxd]
+        sh.batch_update({"requests": reqs})
 
 
 def write_table(sh, rows, groups, meta):
@@ -428,25 +425,46 @@ def write_table(sh, rows, groups, meta):
     def fmt(r0, c0, r1, c1, cf, fields="userEnteredFormat"):
         return {"repeatCell": {"range": rng(r0, c0, r1, c1), "cell": {"userEnteredFormat": cf}, "fields": fields}}
 
+    black = {"red": 0, "green": 0, "blue": 0}
+
+    def rc(r0, c0, r1, c1, uef, fields):
+        return {"repeatCell": {"range": rng(r0, c0, r1, c1), "cell": {"userEnteredFormat": uef}, "fields": fields}}
+
     B, L = 2, lastcol
-    reqs = [fmt(FIRST_ROW, B, last, L, cell(bg=white), "userEnteredFormat.backgroundColor")]
+    body0 = hdr + 1
+    wb_num_last = 2 + meta["ncols_wb"] + 1     # F
+    oz_num_first = OZ_COL + 1                   # J
+    reqs = [rc(FIRST_ROW, B, last, L, {"backgroundColor": white}, "userEnteredFormat.backgroundColor")]
+    # заголовок / подзаголовок / шапка — полным форматом (один раз, не перетираются)
     reqs.append(fmt(FIRST_ROW, B, FIRST_ROW, L, cell(bg=dark, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
     reqs.append(fmt(FIRST_ROW + 1, B, FIRST_ROW + 1, L, cell(bg={"red": 0.9, "green": 0.93, "blue": 0.98}, fs=9, color=grey, halign="CENTER", valign="MIDDLE", italic=True)))
     reqs.append(fmt(hdr, B, hdr, L, cell(bg=blue, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
-    # тело — числа по центру, метки слева
-    reqs.append(fmt(hdr + 1, B, last, B, cell(halign="LEFT")))
-    reqs.append(fmt(hdr + 1, 3, last, L, cell(halign="CENTER")))
-    reqs.append(fmt(hdr + 1, 3, last, 3 + meta["ncols_wb"], cell(halign="CENTER")))
-    # строки-дни — обычные; итоги месяца — зелёные жирные; ВСЕГО — жёлтый жирный
+    # --- ТЕЛО: точечные поля, чтобы стили не затирали друг друга ---
+    # база: артикульные строки мельче/серее (потом строки-итоги дней вернём к 10/чёрному)
+    reqs.append(rc(body0, B, last, L, {"textFormat": {"fontSize": 9, "foregroundColor": grey}},
+                   "userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
+    # ВЫРАВНИВАНИЕ: метки (даты/артикулы) в колонках B и I — по левому краю; все числа — по центру
+    reqs.append(rc(body0, B, last, B, {"horizontalAlignment": "LEFT"}, "userEnteredFormat.horizontalAlignment"))
+    reqs.append(rc(body0, OZ_COL, last, OZ_COL, {"horizontalAlignment": "LEFT"}, "userEnteredFormat.horizontalAlignment"))
+    reqs.append(rc(body0, 3, last, wb_num_last, {"horizontalAlignment": "CENTER"}, "userEnteredFormat.horizontalAlignment"))
+    reqs.append(rc(body0, oz_num_first, last, L, {"horizontalAlignment": "CENTER"}, "userEnteredFormat.horizontalAlignment"))
+    # строки-итоги ДНЕЙ: обычный размер 10, чёрный (перекрываем «мелкий серый» базы)
+    for rr in meta["day_rows"]:
+        reqs.append(rc(rr, B, rr, L, {"textFormat": {"fontSize": 10, "foregroundColor": black}},
+                       "userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
+    # итоги месяцев — зелёный фон + жирный + 10/чёрный
     for rr in meta["subtotals"]:
-        reqs.append(fmt(rr, B, rr, L, cell(bg=green, bold=True)))
-    reqs.append(fmt(meta["total"], B, meta["total"], L, cell(bg=yellow, bold=True, fs=11)))
-    # строки-артикулы — мельче/серее
-    for rr in meta["art_rows"]:
-        reqs.append(fmt(rr, B, rr, L, cell(fs=9, color=grey)))
-    # даты (колонки-метки B и I) — текст, чтобы не превращались в числа
-    reqs.append({"repeatCell": {"range": rng(hdr + 1, B, last, B), "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}}, "fields": "userEnteredFormat.numberFormat"}})
-    reqs.append({"repeatCell": {"range": rng(hdr + 1, OZ_COL, last, OZ_COL), "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}}, "fields": "userEnteredFormat.numberFormat"}})
+        reqs.append(rc(rr, B, rr, L, {"backgroundColor": green}, "userEnteredFormat.backgroundColor"))
+        reqs.append(rc(rr, B, rr, L, {"textFormat": {"bold": True, "fontSize": 10, "foregroundColor": black}},
+                       "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
+    # ВСЕГО — жёлтый + жирный + 11/чёрный
+    tr = meta["total"]
+    reqs.append(rc(tr, B, tr, L, {"backgroundColor": yellow}, "userEnteredFormat.backgroundColor"))
+    reqs.append(rc(tr, B, tr, L, {"textFormat": {"bold": True, "fontSize": 11, "foregroundColor": black}},
+                   "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
+    # даты/метки — текстовый формат (колонки B и I), чтобы не превращались в числа
+    reqs.append(rc(body0, B, last, B, {"numberFormat": {"type": "TEXT"}}, "userEnteredFormat.numberFormat"))
+    reqs.append(rc(body0, OZ_COL, last, OZ_COL, {"numberFormat": {"type": "TEXT"}}, "userEnteredFormat.numberFormat"))
     # границы всего блока
     solid = {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}}
     med = {"style": "SOLID_MEDIUM"}
@@ -455,14 +473,20 @@ def write_table(sh, rows, groups, meta):
         reqs.append({"mergeCells": {"range": rng(rr, B, rr, L), "mergeType": "MERGE_ALL"}})
     sh.batch_update({"requests": reqs})
 
-    # 3) группы (плюсики): сначала addDimensionGroup, потом collapsed
+    # 3) группы (плюсики): создаём, потом сворачиваем по ФАКТИЧЕСКИМ range+depth
     if groups:
         addr = [{"addDimensionGroup": {"range": {"sheetId": sid, "dimension": "ROWS",
                  "startIndex": g["start"] - 1, "endIndex": g["end"]}}} for g in groups]
         sh.batch_update({"requests": addr})
-        upd = [{"updateDimensionGroup": {"dimensionGroup": {"range": {"sheetId": sid, "dimension": "ROWS",
-                "startIndex": g["start"] - 1, "endIndex": g["end"]}, "depth": g["depth"], "collapsed": True},
-                "fields": "collapsed"}} for g in groups if g["collapsed"]]
+        # Google сам переназначает depth при вложении → перечитываем реальные группы моей зоны
+        time.sleep(0.6)
+        m2 = sh.fetch_sheet_metadata({"fields": "sheets(properties(sheetId),rowGroups(range,depth))"})
+        mine = []
+        for s_ in m2.get("sheets", []):
+            if s_["properties"]["sheetId"] == sid:
+                mine = [g for g in s_.get("rowGroups", []) if g["range"].get("startIndex", 0) >= MYZONE_START0]
+        upd = [{"updateDimensionGroup": {"dimensionGroup": {"range": g["range"], "depth": g["depth"],
+                "collapsed": True}, "fields": "collapsed"}} for g in mine]
         if upd:
             sh.batch_update({"requests": upd})
 
