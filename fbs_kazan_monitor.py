@@ -247,7 +247,9 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
 
     # шапка
     rows = []
-    hdr_title = blank_row(); put(hdr_title, 2, "ЗАКАЗЫ FBS ПО ДНЯМ (ШТ) · WB + OZON")
+    hdr_title = blank_row()
+    put(hdr_title, 2, "ВБ · заказы FBS по дням (шт)")
+    put(hdr_title, 8, "OZON · заказы FBS по дням (шт)")   # столбец H (шапка Озон-блока по оформлению владельца)
     rows.append(hdr_title)
     sub = blank_row(); put(sub, 2, f"с 01.08.2026 · {stamp} · плюсики: месяц ▸ дни ▸ артикулы")
     rows.append(sub)
@@ -311,7 +313,12 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
         keys = {}
         for art in wb_day: keys.setdefault(_norm(art), art)
         for art in oz_day: keys.setdefault(_norm(art), art)
-        # строки артикулов (детализация) — ИДУТ ВЫШЕ строки-итога дня (контроль группы будет на итоге дня, ниже)
+        # ДАТА сверху — строка-итог дня
+        drow = blank_row()
+        wb_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", wb_wh_tot, sum(wb_wh_tot.values()))
+        oz_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", oz_wh_tot, sum(oz_wh_tot.values()))
+        rows.append(drow); day_rows_meta.append(("day", r)); r += 1
+        # артикулы этой даты — НИЖЕ (свёрнутая группа под строкой даты)
         art_start = r
         for k, disp in sorted(keys.items(), key=lambda kv: kv[1].lower()):
             arow = blank_row()
@@ -338,16 +345,10 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
                     put(arow, OZW + 1 + i, oz_perwh.get(wid, "") or ("" if oz_perwh.get(wid, 0) == 0 else oz_perwh[wid]))
                 put(arow, OZW + 1 + n_oz, ot or "")
             rows.append(arow); day_rows_meta.append(("art", r)); r += 1
-        # строка-итог дня
-        drow = blank_row()
-        wb_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", wb_wh_tot, sum(wb_wh_tot.values()))
-        oz_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", oz_wh_tot, sum(oz_wh_tot.values()))
-        rows.append(drow); day_rows_meta.append(("day", r))
-        day_summary_row = r
-        r += 1
-        # группа артикулов depth2 (свёрнута), контроль на строке-итоге дня (ниже группы)
-        if day_summary_row - 1 >= art_start:
-            groups.append({"start": art_start, "end": day_summary_row - 1, "depth": 2, "collapsed": True})
+        art_end = r - 1
+        # группа артикулов depth2 (свёрнута) — строки НИЖЕ даты
+        if art_end >= art_start:
+            groups.append({"start": art_start, "end": art_end, "depth": 2, "collapsed": True})
         # накопить месяц/итог
         for i, (wid, _) in enumerate(wb_whs):
             month_sum["wb"][i] += wb_wh_tot.get(wid, 0); grand["wb"][i] += wb_wh_tot.get(wid, 0)
@@ -434,11 +435,16 @@ def write_table(sh, rows, groups, meta):
     body0 = hdr + 1
     wb_num_last = 2 + meta["ncols_wb"] + 1     # F
     oz_num_first = OZ_COL + 1                   # J
+    purple = {"red": 0.42, "green": 0.32, "blue": 0.62}   # ВБ
+    GAPW = 7   # столбец G — к ВБ (фиолетовый), H..L — к Озону (синий), по оформлению владельца
     reqs = [rc(FIRST_ROW, B, last, L, {"backgroundColor": white}, "userEnteredFormat.backgroundColor")]
-    # заголовок / подзаголовок / шапка — полным форматом (один раз, не перетираются)
-    reqs.append(fmt(FIRST_ROW, B, FIRST_ROW, L, cell(bg=dark, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
+    # ЗАГОЛОВКИ БЛОКОВ: ВБ фиолетовый (B..G), ОЗОН синий (H..L)
+    reqs.append(fmt(FIRST_ROW, B, FIRST_ROW, GAPW, cell(bg=purple, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
+    reqs.append(fmt(FIRST_ROW, GAPW + 1, FIRST_ROW, L, cell(bg=blue, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
     reqs.append(fmt(FIRST_ROW + 1, B, FIRST_ROW + 1, L, cell(bg={"red": 0.9, "green": 0.93, "blue": 0.98}, fs=9, color=grey, halign="CENTER", valign="MIDDLE", italic=True)))
-    reqs.append(fmt(hdr, B, hdr, L, cell(bg=blue, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
+    # шапка колонок: ВБ фиолетовая (B..G), ОЗОН синяя (H..L)
+    reqs.append(fmt(hdr, B, hdr, GAPW, cell(bg=purple, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
+    reqs.append(fmt(hdr, GAPW + 1, hdr, L, cell(bg=blue, bold=True, color=white, halign="CENTER", valign="MIDDLE")))
     # --- ТЕЛО: точечные поля, чтобы стили не затирали друг друга ---
     # база: артикульные строки мельче/серее (потом строки-итоги дней вернём к 10/чёрному)
     reqs.append(rc(body0, B, last, L, {"textFormat": {"fontSize": 9, "foregroundColor": grey}},
@@ -469,8 +475,11 @@ def write_table(sh, rows, groups, meta):
     solid = {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}}
     med = {"style": "SOLID_MEDIUM"}
     reqs.append({"updateBorders": {"range": rng(FIRST_ROW, B, last, L), "top": med, "bottom": med, "left": med, "right": med, "innerHorizontal": solid, "innerVertical": solid}})
-    for rr in (FIRST_ROW, FIRST_ROW + 1):
-        reqs.append({"mergeCells": {"range": rng(rr, B, rr, L), "mergeType": "MERGE_ALL"}})
+    # объединения шапки: снять старые, затем ВБ-заголовок (B..F) и ОЗОН-заголовок (I..L) отдельно, подзаголовок — на всю ширину
+    reqs.append({"unmergeCells": {"range": rng(FIRST_ROW, B, FIRST_ROW + 1, L)}})
+    reqs.append({"mergeCells": {"range": rng(FIRST_ROW, B, FIRST_ROW, wb_num_last), "mergeType": "MERGE_ALL"}})   # ВБ-заголовок B:F
+    reqs.append({"mergeCells": {"range": rng(FIRST_ROW, GAPW + 1, FIRST_ROW, L), "mergeType": "MERGE_ALL"}})       # OZON-заголовок H:L
+    reqs.append({"mergeCells": {"range": rng(FIRST_ROW + 1, B, FIRST_ROW + 1, L), "mergeType": "MERGE_ALL"}})      # подзаголовок B:L
     sh.batch_update({"requests": reqs})
 
     # 3) группы (плюсики): создаём, потом сворачиваем по ФАКТИЧЕСКИМ range+depth
