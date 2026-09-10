@@ -266,70 +266,38 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
     d = START
     while d < end:
         days.append(d); d += timedelta(days=1)
-
-    groups = []            # {start,end,depth,collapsed} 1-индекс строк листа
-    subtotal_rows, total_rows_for_month = [], []
-    grand = {"wb": [0] * ncols_wb, "oz": [0] * n_oz}
-    r = FIRST_ROW + 3      # первая строка данных (после шапки)
-    day_rows_meta = []     # для стилей: какие строки — дни, какие — артикулы
-    prev_month = None
-    month_block_start = None
-    month_sum = None
-
-    def flush_month(m):
-        nonlocal month_sum, month_block_start
-        wb_t = month_sum["wb"]; oz_t = month_sum["oz"]
-        mrow = blank_row()
-        wb_cells(mrow, f"Итого {MONTHS_RU[m]}", {wb_whs[i][0]: wb_t[i] for i in range(ncols_wb)}, sum(wb_t))
-        oz_cells(mrow, f"Итого {MONTHS_RU[m]}", {oz_list[i]: oz_t[i] for i in range(n_oz)}, sum(oz_t))
-        return mrow
-
+    # дни по месяцам (порядок сохраняется)
+    months = []
     for d in days:
-        if prev_month is not None and d.month != prev_month:
-            # закрыть месяц: строки month_block_start..r-1 — группа depth1 (свёрнута), контроль на строке итога (ниже)
-            rows.append(flush_month(prev_month)); month_row = r
-            subtotal_rows.append(month_row)
-            if month_row - 1 >= month_block_start:
-                groups.append({"start": month_block_start, "end": month_row - 1, "depth": 1, "collapsed": True})
-            r += 1
-            month_block_start = None; month_sum = None
-        if month_block_start is None:
-            month_block_start = r
-            month_sum = {"wb": [0] * ncols_wb, "oz": [0] * n_oz}
-        prev_month = d.month
-        ds = d.strftime("%Y-%m-%d")
-        wb_day = wb_data.get(ds, {})   # {article:{wid:q}}
-        oz_day = oz_data.get(ds, {})
-        # суммы дня
-        wb_wh_tot = {wid: 0 for wid, _ in wb_whs}
+        key = (d.year, d.month)
+        if not months or months[-1][0] != key:
+            months.append((key, []))
+        months[-1][1].append(d)
+
+    def day_totals(ds):
+        wb_day = wb_data.get(ds, {}); oz_day = oz_data.get(ds, {})
+        wb_t = {wid: 0 for wid, _ in wb_whs}
         for art, perwh in wb_day.items():
             for wid, q in perwh.items():
-                if wid in wb_wh_tot: wb_wh_tot[wid] += q
-        oz_wh_tot = {wid: 0 for wid in oz_list}
+                if wid in wb_t: wb_t[wid] += q
+        oz_t = {wid: 0 for wid in oz_list}
         for art, perwh in oz_day.items():
             for wid, q in perwh.items():
-                if wid in oz_wh_tot: oz_wh_tot[wid] += q
-        # объединённый список артикулов (union), только проданные
+                if wid in oz_t: oz_t[wid] += q
+        return wb_day, oz_day, wb_t, oz_t
+
+    def article_rows(wb_day, oz_day):
         keys = {}
         for art in wb_day: keys.setdefault(_norm(art), art)
         for art in oz_day: keys.setdefault(_norm(art), art)
-        # ДАТА сверху — строка-итог дня
-        drow = blank_row()
-        wb_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", wb_wh_tot, sum(wb_wh_tot.values()))
-        oz_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", oz_wh_tot, sum(oz_wh_tot.values()))
-        rows.append(drow); day_rows_meta.append(("day", r)); r += 1
-        # артикулы этой даты — НИЖЕ (свёрнутая группа под строкой даты)
-        art_start = r
+        out = []
         for k, disp in sorted(keys.items(), key=lambda kv: kv[1].lower()):
             arow = blank_row()
-            # WB часть
-            wb_perwh = {}
-            wt = 0
+            wb_perwh = {}; wt = 0
             for art, perwh in wb_day.items():
                 if _norm(art) == k:
                     for wid, q in perwh.items():
                         wb_perwh[wid] = wb_perwh.get(wid, 0) + q; wt += q
-            # Ozon часть
             oz_perwh = {}; ot = 0
             for art, perwh in oz_day.items():
                 if _norm(art) == k:
@@ -337,31 +305,57 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
                         oz_perwh[wid] = oz_perwh.get(wid, 0) + q; ot += q
             put(arow, 2, disp)
             for i, (wid, _) in enumerate(wb_whs):
-                put(arow, 3 + i, wb_perwh.get(wid, "") or ("" if wb_perwh.get(wid, 0) == 0 else wb_perwh[wid]))
+                v = wb_perwh.get(wid, 0); put(arow, 3 + i, v if v else "")
             put(arow, 2 + ncols_wb + 1, wt or "")
             if ot > 0:
                 put(arow, OZW, disp)
                 for i, wid in enumerate(oz_list):
-                    put(arow, OZW + 1 + i, oz_perwh.get(wid, "") or ("" if oz_perwh.get(wid, 0) == 0 else oz_perwh[wid]))
+                    v = oz_perwh.get(wid, 0); put(arow, OZW + 1 + i, v if v else "")
                 put(arow, OZW + 1 + n_oz, ot or "")
-            rows.append(arow); day_rows_meta.append(("art", r)); r += 1
-        art_end = r - 1
-        # группа артикулов depth2 (свёрнута) — строки НИЖЕ даты
-        if art_end >= art_start:
-            groups.append({"start": art_start, "end": art_end, "depth": 2, "collapsed": True})
-        # накопить месяц/итог
-        for i, (wid, _) in enumerate(wb_whs):
-            month_sum["wb"][i] += wb_wh_tot.get(wid, 0); grand["wb"][i] += wb_wh_tot.get(wid, 0)
-        for i, wid in enumerate(oz_list):
-            month_sum["oz"][i] += oz_wh_tot.get(wid, 0); grand["oz"][i] += oz_wh_tot.get(wid, 0)
+            out.append(arow)
+        return out
 
-    if prev_month is not None:
-        rows.append(flush_month(prev_month)); month_row = r
-        subtotal_rows.append(month_row)
-        if month_row - 1 >= month_block_start:
-            groups.append({"start": month_block_start, "end": month_row - 1, "depth": 1, "collapsed": True})
-        r += 1
-    # ВСЕГО
+    groups = []
+    subtotal_rows = []
+    day_rows_meta = []
+    grand = {"wb": [0] * ncols_wb, "oz": [0] * n_oz}
+    r = FIRST_ROW + 3
+
+    for (yy, mm), mdays in months:
+        # итоги месяца считаем заранее — строку «Итого месяц» пишем СВЕРХУ
+        m_wb = [0] * ncols_wb; m_oz = [0] * n_oz
+        prepared = []
+        for d in mdays:
+            ds = d.strftime("%Y-%m-%d")
+            wb_day, oz_day, wb_t, oz_t = day_totals(ds)
+            for i, (wid, _) in enumerate(wb_whs):
+                m_wb[i] += wb_t.get(wid, 0); grand["wb"][i] += wb_t.get(wid, 0)
+            for i, wid in enumerate(oz_list):
+                m_oz[i] += oz_t.get(wid, 0); grand["oz"][i] += oz_t.get(wid, 0)
+            prepared.append((d, wb_day, oz_day, wb_t, oz_t))
+        # СТРОКА ИТОГ МЕСЯЦА — сверху (на ней будет плюсик, раскрывающий дни ниже)
+        mrow = blank_row()
+        wb_cells(mrow, f"Итого {MONTHS_RU[mm]}", {wb_whs[i][0]: m_wb[i] for i in range(ncols_wb)}, sum(m_wb))
+        oz_cells(mrow, f"Итого {MONTHS_RU[mm]}", {oz_list[i]: m_oz[i] for i in range(n_oz)}, sum(m_oz))
+        rows.append(mrow); subtotal_rows.append(r); r += 1
+        month_start = r
+        # ДНИ месяца — ниже итога
+        for (d, wb_day, oz_day, wb_t, oz_t) in prepared:
+            drow = blank_row()
+            wb_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", wb_t, sum(wb_t.values()))
+            oz_cells(drow, f"{d:%d.%m.%Y} {WD[d.weekday()]}", oz_t, sum(oz_t.values()))
+            rows.append(drow); day_rows_meta.append(("day", r)); r += 1
+            art_start = r
+            for arow in article_rows(wb_day, oz_day):
+                rows.append(arow); day_rows_meta.append(("art", r)); r += 1
+            art_end = r - 1
+            if art_end >= art_start:                      # артикулы дня — ниже даты
+                groups.append({"start": art_start, "end": art_end, "depth": 2, "collapsed": True})
+        month_end = r - 1
+        if month_end >= month_start:                      # дни месяца — ниже итога месяца
+            groups.append({"start": month_start, "end": month_end, "depth": 1, "collapsed": True})
+
+    # ВСЕГО — внизу, не в группе
     grow = blank_row()
     wb_cells(grow, "ВСЕГО за период", {wb_whs[i][0]: grand["wb"][i] for i in range(ncols_wb)}, sum(grand["wb"]))
     oz_cells(grow, "ВСЕГО за период", {oz_list[i]: grand["oz"][i] for i in range(n_oz)}, sum(grand["oz"]))
