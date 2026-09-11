@@ -183,7 +183,12 @@ def main():
     alerts = []
     for (key, scheme, name, wid), qty in current.items():
         last = st.get(key)
-        grew = (last is None and qty >= ARRIVAL_MIN) or (last is not None and qty - last >= ARRIVAL_MIN)
+        # рост от базы = приход; впервые увиденный ключ считаем приходом ТОЛЬКО для нового
+        # WB-FBS склада (появился склад с товаром). Суммарные FBO/Ozon-ключи при первом
+        # появлении (например, источник восстановился после сбоя) НЕ алертим — просто база.
+        increased = last is not None and qty - last >= ARRIVAL_MIN
+        new_wh = last is None and qty >= ARRIVAL_MIN and key.startswith("WBFBS|")
+        grew = increased or new_wh
         print(f"  {scheme:8} {name[:24]:24} остаток={qty} (было {last}) {'ПРИХОД' if grew and initialized else ''}")
         if initialized and grew:
             delta = qty - last if last is not None else qty
