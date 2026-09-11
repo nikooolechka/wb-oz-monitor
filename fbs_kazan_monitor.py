@@ -202,6 +202,70 @@ def kazan_stock(kazan_id):
         return None
 
 
+def wb_stock_by_wh(wb_whs):
+    """Актуальные остатки FBS по складам WB: {wid: {norm_art: amount}} + {norm_art: display}.
+    Баркоды карточек -> vendorCode, затем /api/v3/stocks/{wid} по каждому складу (present)."""
+    bc2art, cursor = {}, {"limit": 1000}
+    for _ in range(30):
+        d = _post(f"{CONTENT}/content/v2/get/cards/list",
+                  {"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}})
+        cards = d.get("cards", [])
+        for c in cards:
+            art = (c.get("vendorCode") or "").strip()
+            for s in c.get("sizes", []):
+                for bc in s.get("skus", []):
+                    if bc:
+                        bc2art[bc] = art
+        cur = d.get("cursor", {})
+        if len(cards) < 1000:
+            break
+        cursor = {"limit": 1000, "updatedAt": cur.get("updatedAt"), "nmID": cur.get("nmID")}
+        time.sleep(0.3)
+    barcodes = list(bc2art)
+    per, names = {}, {}
+    for wid, _ in wb_whs:
+        acc = {}
+        for i in range(0, len(barcodes), 1000):
+            try:
+                st = _post(f"{MP}/api/v3/stocks/{wid}", {"skus": barcodes[i:i + 1000]})
+            except Exception as e:
+                print(f"wb stock {wid} err: {e}")
+                continue
+            for s in st.get("stocks", []):
+                amt = s.get("amount", 0) or 0
+                art = bc2art.get(s.get("sku"))
+                if not art or not amt:
+                    continue
+                k = _norm(art)
+                acc[k] = acc.get(k, 0) + amt
+                names.setdefault(k, art)
+            time.sleep(0.25)
+        per[wid] = acc
+    return per, names
+
+
+def oz_fbs_stock():
+    """Актуальные остатки Ozon FBS (склад один — Краснодар): {norm_art: present} + {norm_art: offer_id}."""
+    acc, names, cursor = {}, {}, ""
+    for _ in range(20):
+        r = _oz("/v4/product/info/stocks", {"filter": {"visibility": "ALL"}, "limit": 1000, "cursor": cursor})
+        items = r.get("items") or r.get("result", {}).get("items", [])
+        for it in items:
+            off = (it.get("offer_id") or "").strip()
+            present = sum(int(s.get("present", 0) or 0)
+                          for s in (it.get("stocks") or [])
+                          if (s.get("type") or s.get("source")) == "fbs")   # v4: type, старое: source
+            if present:
+                k = _norm(off)
+                acc[k] = acc.get(k, 0) + present
+                names.setdefault(k, off)
+        cursor = r.get("cursor") or r.get("result", {}).get("cursor")
+        if not items or not cursor:
+            break
+        time.sleep(0.2)
+    return acc, names
+
+
 def _norm(a):
     return re.sub(r"[^a-z0-9]", "", (a or "").lower())
 
@@ -213,7 +277,8 @@ def _sheet():
     return gspread.authorize(creds).open_by_key(OP_SHEET)
 
 
-def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp):
+def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp,
+          wb_stock=None, oz_stock=None, stock_names=None):
     """Строит матрицу + группы. Колонки WB динамические, блок Ozon сдвигается за WB.
     Раскладка: B=Дата, склады WB.., Итого(wb_last); разрыв 2 стб (WB-фиол./Ozon-син.);
     OZW=Дата Ozon, склады Ozon.., Итого(oz_last)."""
@@ -251,7 +316,7 @@ def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp):
     put(hdr_title, 2, "ВБ · заказы FBS по дням (шт)")
     put(hdr_title, wb_last + 2, "OZON · заказы FBS по дням (шт)")   # столбец Ozon-заголовка (после WB-разрыва)
     rows.append(hdr_title)
-    sub = blank_row(); put(sub, 2, f"с 01.08.2026 · {stamp} · плюсики: месяц ▸ дни ▸ артикулы")
+    sub = blank_row(); put(sub, 2, f"с 01.08.2026 · {stamp} · плюсики: месяц ▸ дни ▸ артикулы · внизу — актуальные остатки FBS")
     rows.append(sub)
     head = blank_row()
     put(head, 2, "Дата")
@@ -355,6 +420,45 @@ def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp):
         if month_end >= month_start:                      # дни месяца — ниже итога месяца
             groups.append({"start": month_start, "end": month_end, "depth": 1, "collapsed": True})
 
+    # ---------- ОСТАТКИ (актуальный срез, всегда под последней датой и над «ВСЕГО») ----------
+    # Один блок в единственном экземпляре: при пересборке каждый прогон он заново
+    # встаёт под самой свежей датой, старого не остаётся. Свёрнут как день/месяц.
+    wb_stock = wb_stock or {}
+    oz_stock = oz_stock or {}
+    stock_names = stock_names or {}
+    stock_parent = None
+    stock_keys = set()
+    for wid, _ in wb_whs:
+        stock_keys |= {k for k, v in wb_stock.get(wid, {}).items() if v}
+    stock_keys |= {k for k, v in oz_stock.items() if v}
+    if stock_keys:
+        s_wb_tot = {wid: sum(wb_stock.get(wid, {}).get(k, 0) for k in stock_keys) for wid, _ in wb_whs}
+        s_oz_tot = sum(oz_stock.get(k, 0) for k in stock_keys)
+        prow = blank_row()
+        wb_cells(prow, "Остатки", s_wb_tot, sum(s_wb_tot.values()))
+        oz_cells(prow, "Остатки", ({oz_list[0]: s_oz_tot} if oz_list else {}), s_oz_tot)
+        rows.append(prow); stock_parent = r; r += 1
+        stock_start = r
+        for k in sorted(stock_keys, key=lambda kk: stock_names.get(kk, kk).lower()):
+            disp = stock_names.get(k, k)
+            arow = blank_row()
+            put(arow, 2, disp)
+            wt = 0
+            for i, (wid, _) in enumerate(wb_whs):
+                v = wb_stock.get(wid, {}).get(k, 0)
+                put(arow, 3 + i, v if v else ""); wt += v
+            put(arow, wb_last, wt or "")
+            ov = oz_stock.get(k, 0)
+            if ov:
+                put(arow, OZW, disp)
+                if oz_list:
+                    put(arow, OZW + 1, ov)          # единственный склад Ozon (Краснодар)
+                put(arow, oz_last, ov)
+            rows.append(arow); r += 1
+        stock_end = r - 1
+        if stock_end >= stock_start:
+            groups.append({"start": stock_start, "end": stock_end, "depth": 1, "collapsed": True})
+
     # ВСЕГО — внизу, не в группе
     grow = blank_row()
     wb_cells(grow, "ВСЕГО за период", {wb_whs[i][0]: grand["wb"][i] for i in range(ncols_wb)}, sum(grand["wb"]))
@@ -363,6 +467,7 @@ def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp):
     meta = {"header": FIRST_ROW + 2, "subtotals": subtotal_rows, "total": total_row,
             "day_rows": [rr for t, rr in day_rows_meta if t == "day"],
             "art_rows": [rr for t, rr in day_rows_meta if t == "art"],
+            "stock_parent": stock_parent,
             "last_col": oz_last, "oz_col": OZW, "wb_last": wb_last,
             "ncols_wb": ncols_wb, "n_oz": n_oz}
     return rows, groups, meta
@@ -460,6 +565,12 @@ def write_table(sh, rows, groups, meta):
         reqs.append(rc(rr, B, rr, L, {"backgroundColor": green}, "userEnteredFormat.backgroundColor"))
         reqs.append(rc(rr, B, rr, L, {"textFormat": {"bold": True, "fontSize": 10, "foregroundColor": black}},
                        "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
+    # ОСТАТКИ (родительская строка) — бежевый фон + жирный 10/чёрный, чтобы выделить срез
+    sp = meta.get("stock_parent")
+    if sp:
+        reqs.append(rc(sp, B, sp, L, {"backgroundColor": beige}, "userEnteredFormat.backgroundColor"))
+        reqs.append(rc(sp, B, sp, L, {"textFormat": {"bold": True, "fontSize": 10, "foregroundColor": black}},
+                       "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
     # ВСЕГО — жёлтый + жирный + 11/чёрный
     tr = meta["total"]
     reqs.append(rc(tr, B, tr, L, {"backgroundColor": yellow}, "userEnteredFormat.backgroundColor"))
@@ -516,9 +627,15 @@ def main():
     wb_data = wb_detailed(end)
     oz_data, oz_names = oz_detailed(end)
     oz_wids = sorted([w for w in oz_names.keys()], key=lambda x: (x is None, x))
-    rows, groups, meta = build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp)
+    # актуальные остатки FBS (срез на сейчас)
+    wb_stock, wb_sn = wb_stock_by_wh(wb_whs)
+    oz_stock, oz_sn = oz_fbs_stock()
+    stock_names = {}; stock_names.update(oz_sn); stock_names.update(wb_sn)   # имя WB в приоритете
+    rows, groups, meta = build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp,
+                               wb_stock=wb_stock, oz_stock=oz_stock, stock_names=stock_names)
     print(f"строк: {len(rows)} | групп: {len(groups)} | WB склады: {[n for _, n in wb_whs]} | "
-          f"Ozon: {[oz_names[w] for w in oz_wids] or ['FBS Краснодар']}")
+          f"Ozon: {[oz_names[w] for w in oz_wids] or ['FBS Краснодар']} | "
+          f"остатки-артикулов: {len(stock_names)}")
     if not DRY:
         write_table(_sheet(), rows, groups, meta)
     # Алерты о приходе товара (Казань и любой новый склад) вынесены в отдельный автомат «Приходы».
