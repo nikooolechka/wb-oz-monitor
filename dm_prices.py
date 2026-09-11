@@ -45,6 +45,14 @@ for i,r in enumerate(rows):
     if not pid: continue   # нет ссылки ДМ — не трогаем (оставляем как есть)
     try:
         it=det(pid)
+        # СТРАХОВКА от перепутанных ссылок: размер пачки в артикуле (Dental_40 -> 40)
+        # должен совпадать с "N шт" в названии товара ДМ; иначе ссылка ведёт не туда.
+        mcount=re.search(r"[Dd]ental_?(\d+)", art)
+        if mcount:
+            want=mcount.group(1); have=re.findall(r"(\d+)\s*шт", it.get("title") or "")
+            if have and want not in have:
+                print(f"  {art:24} ⚠ РАЗМЕР НЕ СХОДИТСЯ: артикул {want} шт, а товар ДМ '{(it.get('title') or '')[:45]}' ({have} шт) — ссылка неверная, ПРОПУСК")
+                continue
         wh=((it.get("available") or {}).get("online") or {}).get("warehouse_codes") or []
         if "1120" not in wh:
             for col in ("V","W","X"): writes.append({"range":f"{SHEET}!{col}{row}","values":[["нет в наличии"]]})
