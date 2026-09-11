@@ -119,6 +119,11 @@
       "status": "ok",
       "oz_dims": "13,7×6×11",
       "oz_vol": 0.904
+    },
+    "makeup_50": {
+      "status": "high",
+      "oz_dims": "14,2×11,6×6,2",
+      "oz_vol": 1.021
     }
   }
 }
