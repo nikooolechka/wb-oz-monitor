@@ -172,7 +172,9 @@ def save_state(st):
 
 def main():
     current = {}
-    for fn in (wb_fbs_stocks, wb_fbo_stocks, oz_fbs_total, oz_fbo_stocks):
+    # FBO отключён по решению владельца (2026-09-11): «будет каша» — Ozon/WB перекладывают
+    # товар между десятками РФЦ, суммарный сигнал невнятный. Оставлен ТОЛЬКО FBS (по складам).
+    for fn in (wb_fbs_stocks, oz_fbs_total):
         try:
             current.update(fn())
         except Exception as e:
