@@ -90,13 +90,13 @@ def _oz(path, body):
         "Content-Type": "application/json"})
 
 
-def wb_warehouses():
+def wb_wh_list():
+    """Все FBS-склады продавца WB динамически. Порядок: Краснодар, Софьино, затем новые по id.
+    Появился новый склад → он сам станет колонкой (Ozon-блок сдвинется правее)."""
     wh = _get(f"{MP}/api/v3/warehouses")
-    kazan = None
-    for w in wh:
-        if "казан" in (w.get("name") or "").lower():
-            kazan = w
-    return wh, kazan
+    order = {KRASNODAR: 0, SOFINO: 1}
+    wh = sorted(wh, key=lambda w: (order.get(w.get("id"), 2), w.get("id") or 0))
+    return [(w["id"], (w.get("name") or str(w.get("id")))) for w in wh]
 
 
 def end_stop():
@@ -213,53 +213,53 @@ def _sheet():
     return gspread.authorize(creds).open_by_key(OP_SHEET)
 
 
-def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
-    """Строит матрицу B..K + список групп. Возвращает (rows, groups, totals, end)."""
+def build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp):
+    """Строит матрицу + группы. Колонки WB динамические, блок Ozon сдвигается за WB.
+    Раскладка: B=Дата, склады WB.., Итого(wb_last); разрыв 2 стб (WB-фиол./Ozon-син.);
+    OZW=Дата Ozon, склады Ozon.., Итого(oz_last)."""
     end = end_stop()
-    wb_whs = [(KRASNODAR, "Краснодар"), (SOFINO, "МП Карго Софьино"), (kazan_id, "Казань")]
     wb_names = [n for _, n in wb_whs]
-    ncols_wb = len(wb_whs)                    # 3
-    # ширина: B..F (5) для WB, разрыв G,H, затем Ozon I.. (1 + n_oz + Итого)
-    OZW = OZ_COL                              # 9 = I
+    ncols_wb = len(wb_whs)
+    wb_last = 2 + ncols_wb + 1                 # столбец «Итого» ВБ
+    OZW = wb_last + 3                          # 2 столбца-разрыва, затем «Дата» Ozon
     n_oz = max(1, len(oz_wids))
     oz_list = oz_wids if oz_wids else [None]
     oz_wnames = [oz_names.get(w, "FBS Краснодар") for w in oz_list]
-    total_cols = (OZW - 1) + 1 + n_oz + 1     # до Ozon-Итого включительно, 1-индекс последней колонки
-    W = total_cols                            # число колонок в строке (B..last)
+    oz_last = OZW + n_oz + 1                    # столбец «Итого» Ozon
+    W = oz_last - 1                             # число ячеек в строке (B..oz_last)
 
     def blank_row():
         return [""] * W
 
-    def put(row, col1, val):                  # col1 — 1-индекс листа; B=2 → индекс 0
+    def put(row, col1, val):                   # col1 — 1-индекс листа; B=2 → индекс 0
         row[col1 - 2] = val
 
     def wb_cells(row, label, per_wh, total):
         put(row, 2, label)
         for i, (wid, _) in enumerate(wb_whs):
-            v = per_wh.get(wid, 0) if per_wh else 0
-            put(row, 3 + i, v)
-        put(row, 2 + ncols_wb + 1, total)     # F
+            put(row, 3 + i, per_wh.get(wid, 0) if per_wh else 0)
+        put(row, wb_last, total)
     def oz_cells(row, label, per_wh, total):
         put(row, OZW, label)
         for i, wid in enumerate(oz_list):
             put(row, OZW + 1 + i, (per_wh.get(wid, 0) if per_wh else 0))
-        put(row, OZW + 1 + n_oz, total)
+        put(row, oz_last, total)
 
     # шапка
     rows = []
     hdr_title = blank_row()
     put(hdr_title, 2, "ВБ · заказы FBS по дням (шт)")
-    put(hdr_title, 8, "OZON · заказы FBS по дням (шт)")   # столбец H (шапка Озон-блока по оформлению владельца)
+    put(hdr_title, wb_last + 2, "OZON · заказы FBS по дням (шт)")   # столбец Ozon-заголовка (после WB-разрыва)
     rows.append(hdr_title)
     sub = blank_row(); put(sub, 2, f"с 01.08.2026 · {stamp} · плюсики: месяц ▸ дни ▸ артикулы")
     rows.append(sub)
     head = blank_row()
-    put(head, 2, "Дата");
+    put(head, 2, "Дата")
     for i, n in enumerate(wb_names): put(head, 3 + i, n)
-    put(head, 2 + ncols_wb + 1, "Итого")
+    put(head, wb_last, "Итого")
     put(head, OZW, "Дата")
     for i, n in enumerate(oz_wnames): put(head, OZW + 1 + i, n)
-    put(head, OZW + 1 + n_oz, "Итого")
+    put(head, oz_last, "Итого")
     rows.append(head)
 
     days = []
@@ -363,7 +363,8 @@ def build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp):
     meta = {"header": FIRST_ROW + 2, "subtotals": subtotal_rows, "total": total_row,
             "day_rows": [rr for t, rr in day_rows_meta if t == "day"],
             "art_rows": [rr for t, rr in day_rows_meta if t == "art"],
-            "last_col": W + 1, "ncols_wb": ncols_wb, "n_oz": n_oz}
+            "last_col": oz_last, "oz_col": OZW, "wb_last": wb_last,
+            "ncols_wb": ncols_wb, "n_oz": n_oz}
     return rows, groups, meta
 
 
@@ -392,7 +393,8 @@ def write_table(sh, rows, groups, meta):
     # 1) снять мои группы (иначе при сжатии строк собьются)
     clear_my_groups(sh, sid)
     # 2) чистим зону и пишем значения
-    ws.batch_clear([f"{a(FIRST_ROW, 2)}:{a(last + 400, lastcol)}"])
+    # чистим с ЗАПАСОМ по ширине (до P) — на случай, если раньше блок был шире (сменилось число складов)
+    ws.batch_clear([f"{a(FIRST_ROW, 2)}:{a(last + 400, max(lastcol, 16))}"])
     ws.update(f"{a(FIRST_ROW, 2)}:{a(last, lastcol)}", rows, value_input_option="RAW")
 
     dark = {"red": 0.13, "green": 0.28, "blue": 0.53}
@@ -427,10 +429,11 @@ def write_table(sh, rows, groups, meta):
 
     B, L = 2, lastcol
     body0 = hdr + 1
-    wb_num_last = 2 + meta["ncols_wb"] + 1     # F
-    oz_num_first = OZ_COL + 1                   # J
+    wb_num_last = meta["wb_last"]              # столбец «Итого» ВБ
+    oz_col = meta["oz_col"]                    # столбец «Дата» Ozon
+    oz_num_first = oz_col + 1                  # первый склад Ozon
     purple = {"red": 0.42, "green": 0.32, "blue": 0.62}   # ВБ
-    GAPW = 7   # столбец G — к ВБ (фиолетовый), H..L — к Озону (синий), по оформлению владельца
+    GAPW = wb_num_last + 1   # столбец-разрыв со стороны ВБ (фиолетовый); дальше синий Ozon
     reqs = [rc(FIRST_ROW, B, last, L, {"backgroundColor": white}, "userEnteredFormat.backgroundColor")]
     # ЗАГОЛОВКИ БЛОКОВ: ВБ фиолетовый (B..G), ОЗОН синий (H..L)
     reqs.append(fmt(FIRST_ROW, B, FIRST_ROW, GAPW, cell(bg=purple, bold=True, fs=12, color=white, halign="CENTER", valign="MIDDLE")))
@@ -445,7 +448,7 @@ def write_table(sh, rows, groups, meta):
                    "userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
     # ВЫРАВНИВАНИЕ: метки (даты/артикулы) в колонках B и I — по левому краю; все числа — по центру
     reqs.append(rc(body0, B, last, B, {"horizontalAlignment": "LEFT"}, "userEnteredFormat.horizontalAlignment"))
-    reqs.append(rc(body0, OZ_COL, last, OZ_COL, {"horizontalAlignment": "LEFT"}, "userEnteredFormat.horizontalAlignment"))
+    reqs.append(rc(body0, oz_col, last, oz_col, {"horizontalAlignment": "LEFT"}, "userEnteredFormat.horizontalAlignment"))
     reqs.append(rc(body0, 3, last, wb_num_last, {"horizontalAlignment": "CENTER"}, "userEnteredFormat.horizontalAlignment"))
     reqs.append(rc(body0, oz_num_first, last, L, {"horizontalAlignment": "CENTER"}, "userEnteredFormat.horizontalAlignment"))
     # строки-итоги ДНЕЙ: обычный размер 10, чёрный (перекрываем «мелкий серый» базы)
@@ -464,13 +467,13 @@ def write_table(sh, rows, groups, meta):
                    "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize,userEnteredFormat.textFormat.foregroundColor"))
     # даты/метки — текстовый формат (колонки B и I), чтобы не превращались в числа
     reqs.append(rc(body0, B, last, B, {"numberFormat": {"type": "TEXT"}}, "userEnteredFormat.numberFormat"))
-    reqs.append(rc(body0, OZ_COL, last, OZ_COL, {"numberFormat": {"type": "TEXT"}}, "userEnteredFormat.numberFormat"))
+    reqs.append(rc(body0, oz_col, last, oz_col, {"numberFormat": {"type": "TEXT"}}, "userEnteredFormat.numberFormat"))
     # границы всего блока
     solid = {"style": "SOLID", "color": {"red": 0.8, "green": 0.8, "blue": 0.8}}
     med = {"style": "SOLID_MEDIUM"}
     reqs.append({"updateBorders": {"range": rng(FIRST_ROW, B, last, L), "top": med, "bottom": med, "left": med, "right": med, "innerHorizontal": solid, "innerVertical": solid}})
     # объединения шапки: снять старые, затем ВБ-заголовок (B..F) и ОЗОН-заголовок (I..L) отдельно, подзаголовок — на всю ширину
-    reqs.append({"unmergeCells": {"range": rng(FIRST_ROW, B, FIRST_ROW + 1, L)}})
+    reqs.append({"unmergeCells": {"range": rng(FIRST_ROW, B, FIRST_ROW + 1, 16)}})   # с запасом (до P), чтобы покрыть старые объединения при смене ширины
     reqs.append({"mergeCells": {"range": rng(FIRST_ROW, B, FIRST_ROW, wb_num_last), "mergeType": "MERGE_ALL"}})   # ВБ-заголовок B:F
     reqs.append({"mergeCells": {"range": rng(FIRST_ROW, GAPW + 1, FIRST_ROW, L), "mergeType": "MERGE_ALL"}})       # OZON-заголовок H:L
     reqs.append({"mergeCells": {"range": rng(FIRST_ROW + 1, B, FIRST_ROW + 1, L), "mergeType": "MERGE_ALL"}})      # подзаголовок B:L
@@ -507,40 +510,18 @@ def save_state(st):
 
 
 def main():
-    st = load_state()
     end = end_stop()
     stamp = f"обновлено {datetime.now(MSK):%d.%m.%Y %H:%M} МСК"
-    _, kazan = wb_warehouses()
-    kazan_id = kazan["id"] if kazan else st.get("kazan_id")
+    wb_whs = wb_wh_list()                        # ВСЕ FBS-склады WB динамически
     wb_data = wb_detailed(end)
     oz_data, oz_names = oz_detailed(end)
     oz_wids = sorted([w for w in oz_names.keys()], key=lambda x: (x is None, x))
-    kz_orders = sum(sum(perwh.get(kazan_id, 0) for perwh in wb_data[ds].values()) for ds in wb_data) if kazan_id else 0
-
-    rows, groups, meta = build(wb_data, oz_data, kazan_id, oz_wids, oz_names, stamp)
-    print(f"строк: {len(rows)} | групп: {len(groups)} | Ozon складов: {[oz_names[w] for w in oz_wids] or ['FBS Краснодар']}")
-
+    rows, groups, meta = build(wb_data, oz_data, wb_whs, oz_wids, oz_names, stamp)
+    print(f"строк: {len(rows)} | групп: {len(groups)} | WB склады: {[n for _, n in wb_whs]} | "
+          f"Ozon: {[oz_names[w] for w in oz_wids] or ['FBS Краснодар']}")
     if not DRY:
         write_table(_sheet(), rows, groups, meta)
-
-    alerts = []
-    if kazan and not st.get("kazan_seen"):
-        st["kazan_seen"] = True; st["kazan_id"] = kazan["id"]
-        alerts.append(f"<b>WB: в кабинете появился FBS-склад «{kazan['name']}».</b>\nОтслеживаю приход товара и заказы.")
-    if kazan_id and not st.get("kazan_stock_alerted"):
-        stock = kazan_stock(kazan_id)
-        if stock and stock > 0:
-            st["kazan_stock_alerted"] = True
-            alerts.append(f"<b>Товар приехал на склад Казань (FBS): {stock} шт остатка.</b>")
-    if kazan_id and kz_orders > 0 and not st.get("kazan_order_alerted"):
-        st["kazan_order_alerted"] = True
-        alerts.append(f"<b>Первый FBS-заказ из Казани.</b>\nВсего по Казани уже {kz_orders} шт за период.")
-    for msg in alerts:
-        print("ALERT:", msg.replace("\n", " / "))
-        if not DRY:
-            notify.send(msg); time.sleep(0.5)
-    if not DRY:
-        save_state(st)
+    # Алерты о приходе товара (Казань и любой новый склад) вынесены в отдельный автомат «Приходы».
 
 
 if __name__ == "__main__":
