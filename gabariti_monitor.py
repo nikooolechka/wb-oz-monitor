@@ -35,7 +35,8 @@ NEW_PRODUCTS_PATH = os.environ.get("NEW_PRODUCTS_PATH", "data/gabariti_new_produ
 # (метка платформы для сообщения, id таблицы, имя вкладки)
 SOURCES = [
     ("ВБ", "1Uf4vxCEImkqDLJSOFSireJFX1srE_8H1QS3GfBr8RZw", "юнит-экономика"),
-    ("ОЗОН", "11ijV3JWhkyUxysv_BrfT7dH5-VP0dU98iBaxBD8sgjg", "юнитка NEW"),
+    # ПЕРЕЕЗД 2026-09-11: старая таблица 11ijV3JWhkyUxysv… больше НЕ используется.
+    ("ОЗОН", "18PHOlKcIoXUFiw3ReXCDESzy-_TXQvcdFcVmJJUiCjs", "юнитка NEW"),
 ]
 
 
