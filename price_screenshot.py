@@ -14,6 +14,10 @@
 Скрин = PDF-экспорт диапазона Лист1 → PNG (реальное форматирование), автообрезка
 сносок-примечаний. Всё из облака, без ПК/браузера.
 
+Нижняя граница диапазона — ДИНАМИЧЕСКАЯ (последняя заполненная строка блока), чтобы
+новые артикулы (их периодически добавляют в таблицу) сами попадали в скрин и не
+обрезались. См. block_last_row().
+
 Куда шлём: ЧАТ ОТДЕЛА (с коллегами) — НЕ личка и НЕ канал «изменения» (три разных
 места, не путать!). chat_id чата отдела = секрет PRICES_SCREENSHOT_CHAT_ID; пока
 он не задан — НЕ шлём никуда. Бот @asfarm_changes_bot должен быть участником чата.
@@ -43,8 +47,15 @@ DRY = os.environ.get("DRY") == "1"
 # маркеты, чью свежесть ТРЕБУЕМ для отправки (основной прогон ПК): столбец-заголовок 0-based
 REQUIRE = [("ВБ", 1), ("Озон", 7), ("ЯМ", 14)]
 GID = 0
-# два скрина: (диапазон, подпись-нет) — подпись даём общую на альбом
-SCREENS = ["B1:M23", "O1:X23"]
+# два скрина: (левый столбец блока, правый столбец блока, столбцы-артикулы для поиска
+# последней строки). Нижняя граница считается динамически в main() — новые артикулы
+# подхватываются сами. HDR = минимальная строка (шапка + пара товаров), чтобы даже при
+# пустом блоке скрин не выродился.
+SCREEN_BLOCKS = [
+    {"left": "B", "right": "M", "art_cols": ["B", "H"]},  # ВБ + Озон
+    {"left": "O", "right": "X", "art_cols": ["O", "U"]},  # ЯМ + Дет Мир
+]
+MIN_LAST = 6
 STATE_FILE = "data/price_screenshot_state.json"
 
 
@@ -62,6 +73,19 @@ def _save_state(st):
 
 def _creds(scopes):
     return Credentials.from_service_account_info(SA, scopes=scopes)
+
+
+def block_last_row(svc, art_cols, floor=MIN_LAST, cap=300):
+    """Последняя заполненная строка блока — максимум по столбцам-артикулам.
+    Так новые товары, добавленные в конец блока, сами входят в скрин."""
+    ranges = [f"Лист1!{c}2:{c}{cap}" for c in art_cols]
+    res = svc.spreadsheets().values().batchGet(spreadsheetId=SHEET, ranges=ranges).execute()
+    last = floor
+    for vr in res.get("valueRanges", []):
+        for i, row in enumerate(vr.get("values", [])):
+            if row and str(row[0]).strip():
+                last = max(last, 2 + i)
+    return last
 
 
 def notes_row1():
@@ -164,7 +188,14 @@ def main():
     creds = _creds(["https://www.googleapis.com/auth/drive.readonly",
                     "https://www.googleapis.com/auth/spreadsheets.readonly"])
     creds.refresh(Request())
-    photos = [export_png(r, creds.token) for r in SCREENS]
+    # диапазоны считаем динамически: нижняя граница = последняя заполненная строка блока
+    svc_v = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    screens = []
+    for blk in SCREEN_BLOCKS:
+        last = block_last_row(svc_v, blk["art_cols"])
+        screens.append(f"{blk['left']}1:{blk['right']}{last}")
+    print(f"[screenshot] диапазоны: {screens}", flush=True)
+    photos = [export_png(r, creds.token) for r in screens]
     cap = f"цены на {now:%d.%m} от {now:%H:%M}"
     print(f"[screenshot] цены свежие — шлю альбом: «{cap}»", flush=True)
     if DRY:
