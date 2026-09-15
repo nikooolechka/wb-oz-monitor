@@ -8,8 +8,7 @@
      2033332, Казань (по «казан» в названии). Заказы /api/v3/orders: по дням,
      складам И артикулам (article), 1 заказ = 1 шт.
   2. Ozon: FBS-отправления /v3/posting/fbs/list: по дням, складам и артикулам
-     (offer_id), штуки = сумма quantity. ОТМЕНЁННЫЕ (status=cancelled) НЕ считаем —
-     иначе число больше фактического (было 67 вместо 62 за 01.08–15.09).
+     (offer_id), штуки = сумма quantity.
   3. Пишет во вкладку FBS (ОП АС Фарм) со строки 65: два блока рядом —
      WB (B: Дата/Краснодар/Софьино/Казань/Итого), Ozon (I: Дата/склады/Итого).
      Период 01.08.2026 → ВЧЕРА (сегодня неполный не пишем).
@@ -151,8 +150,6 @@ def oz_detailed(date_to):
             "limit": 1000, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
         ps = r.get("result", {}).get("postings", [])
         for p in ps:
-            if p.get("status") == "cancelled":
-                continue                       # отменённые заказы не считаем — не фактические
             ca = p.get("created_at") or p.get("in_process_at")
             if not ca:
                 continue
