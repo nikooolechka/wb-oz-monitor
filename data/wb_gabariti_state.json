@@ -86,14 +86,14 @@
       "pct": 25
     },
     "Dental_20_zemlyanika": {
-      "status": "low",
-      "wb_vol": 0.213,
-      "pct": -10
+      "status": "high",
+      "wb_vol": 0.273,
+      "pct": 16
     },
     "Dental_100": {
-      "status": "ok",
-      "wb_vol": 0.924,
-      "pct": 0
+      "status": "high",
+      "wb_vol": 1.008,
+      "pct": 9
     },
     "Dental_40_zemlyanika": {
       "status": "ok",
