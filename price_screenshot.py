@@ -162,7 +162,7 @@ def main():
     # (17:30 + резерв 18:00). Воркфлоу дёргается и в 06:30 (Яндекс-таймер сбора), и в
     # кривое время (GitHub-крон срабатывает не в срок: 15:41, 21:14…). Вне окна НЕ шлём —
     # тогда скрин уходит только около 10:30 и 17:30, чем бы прогон ни запустился.
-    SEND_WINDOW = {"morning": range(9, 14), "evening": range(16, 21)}
+    SEND_WINDOW = {"morning": range(9, 12), "evening": range(16, 19)}  # утро 9–11, вечер 16–18
     if now.hour not in SEND_WINDOW[phase]:
         print(f"[screenshot] {now:%H:%M} вне окна отправки {phase} — пропуск (шлём ~10:30 и ~17:30)", flush=True)
         return
