@@ -53,7 +53,7 @@ GID = 0
 # пустом блоке скрин не выродился.
 SCREEN_BLOCKS = [
     {"left": "B", "right": "M", "art_cols": ["B", "H"]},  # ВБ + Озон
-    {"left": "O", "right": "X", "art_cols": ["O", "U"]},  # ЯМ + Дет Мир
+    {"left": "O", "right": "Y", "art_cols": ["O", "U"]},  # ЯМ + Дет Мир (Y = СПП ДМ)
 ]
 MIN_LAST = 6
 STATE_FILE = "data/price_screenshot_state.json"
@@ -158,6 +158,12 @@ def main():
     now = datetime.now(MSK)
     today = now.strftime("%Y-%m-%d")
     phase = "morning" if now.hour < 14 else "evening"
+    # НЕ слать слишком рано: триггер дёргает воркфлоу и в 06:30, но утренний скрин —
+    # для окна ~10:30. Если цены штампанулись ночью, без этого страж уходил бы в 6 утра,
+    # а штатный 10:30 глушился дедупом.
+    if phase == "morning" and now.hour < 9:
+        print(f"[screenshot] {now:%H:%M} рано для утреннего окна (шлём с ~10:30) — пропуск", flush=True)
+        return
     # выходные (сб=5, вс=6): вечерний скрин НЕ шлём, только утренний 10:30
     if phase == "evening" and now.weekday() >= 5:
         print("[screenshot] выходной — вечерний скрин не шлём (только 10:30)", flush=True)
