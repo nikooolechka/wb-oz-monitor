@@ -203,13 +203,13 @@ else:
             gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"addSheet":{"properties":{"title":ST,"hidden":True,"gridProperties":{"rowCount":300,"columnCount":5}}}}]})
         stv=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}").get("values",[])
         stm={r[0]:(n1c(r[1]),n1c(r[2]),(r[3] if len(r)>3 else "")) for r in stv if r and r[0]}
-        newst={}; prod_key={}
+        newst={}; prod_art={}
         for k,(raw,sv) in items.items():
             key=_cn(article(raw))+"|"+_pk(raw); st0=stm.get(key)
             if (st0 is None) or (st0[2]!=cyc): prod=sv; last=sv
             else:
                 d=sv-st0[0]; prod=st0[1]+(d if d>0 else 0); last=sv
-            newst[key]=(last,prod,cyc); prod_key[key]=prod
+            newst[key]=(last,prod,cyc); _a=_cn(article(raw)); prod_art[_a]=prod_art.get(_a,0)+prod
         strows=[[k,newst[k][0],newst[k][1],newst[k][2]] for k in newst]
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}:clear",{})
         if strows: gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1')}?valueInputOption=USER_ENTERED",{"values":strows})
@@ -219,12 +219,12 @@ else:
             for i,h in enumerate(_dh):
                 if all(x in h for x in kk): return i
             return None
-        _ia=_fd("артикул"); _ip=_fd("потребность"); _in=_fd("название"); _in=_in if _in is not None else 0; potk={}
+        _ia=_fd("артикул"); _ip=_fd("потребность"); potra={}
         for r in _dg[1:]:
             a=(r[_ia] if len(r)>_ia else "").strip()
             if not a or a.lower()=="тотал": continue
-            v=n1c(r[_ip] if len(r)>_ip else ""); nm=(r[_in] if len(r)>_in else ""); key=_cn(a)+"|"+_pk(nm)
-            if key not in potk and v: potk[key]=v
+            v=n1c(r[_ip] if len(r)>_ip else ""); c=_cn(a)
+            if c not in potra and v: potra[c]=v
         # расширить сетку до 11 столбцов (бар D + служебные H/I/J)
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":OSTGID,"gridProperties":{"columnCount":11}},"fields":"gridProperties.columnCount"}}]})
         ov2=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+chr(33)+'A1:K80')}").get("values",[])
@@ -232,9 +232,9 @@ else:
         for i in range(2,len(ov2)):
             r=ov2[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
             if not art or art.upper()=="ИТОГО" or str(nm).strip().upper()=="ИТОГО": continue
-            key=_cn(art)+"|"+_pk(nm)
-            if key in seen: continue
-            seen.add(key); row=i+1; pot=potk.get(key); prod=prod_key.get(key,0)
+            c=_cn(art)
+            if c in seen: continue
+            seen.add(c); row=i+1; pot=potra.get(c); prod=prod_art.get(c,0)
             vw.append({"range":f"{TAB}!H{row}","values":[[prod]]})          # произведено (служебн.)
             vw.append({"range":f"{TAB}!I{row}","values":[[pot if pot is not None else ""]]})  # потребность (служебн.)
             if pot:
