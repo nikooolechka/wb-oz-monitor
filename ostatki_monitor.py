@@ -138,9 +138,6 @@ if DRY: print(f"[DRY] Свободно обновил бы: {len(used)} | нов
 else:
     gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":updates})
     print(f"обновлено Свободно: {len(used)} | новых: {len(new)} | дата {datestr}")
-    # перенос строки, чтобы длинная номенклатура не обрезалась на скрине
-    gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[
-        {"repeatCell":{"range":{"sheetId":GID,"startRowIndex":2,"endRowIndex":last_row,"startColumnIndex":cN,"endColumnIndex":cN+1},"cell":{"userEnteredFormat":{"wrapStrategy":"WRAP"}},"fields":"userEnteredFormat.wrapStrategy"}}]})
 
 # 4. скрин: ВСЕ строки + ВСЕ столбцы (до последнего с данными)
 png=None
