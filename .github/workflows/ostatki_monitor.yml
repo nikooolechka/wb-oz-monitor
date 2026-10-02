@@ -24,6 +24,6 @@ jobs:
           MAILRU_APP_PASS: ${{ secrets.MAILRU_APP_PASS }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          OSTATKI_CHAT_ID: ${{ secrets.OSTATKI_CHAT_ID }}
+          OSTATKI_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NODELETE: ${{ github.event.inputs.nodelete }}
         run: python ostatki_monitor.py
