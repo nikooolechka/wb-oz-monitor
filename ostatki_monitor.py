@@ -168,7 +168,10 @@ if png:
         def part(n,v): body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n".encode())
         part("chat_id",CHAT); part("caption",cap)
         body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"ost.png\"\r\nContent-Type: image/png\r\n\r\n".encode()); body.write(png); body.write(f"\r\n--{boundary}--\r\n".encode())
-        res=json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{TGTOK}/sendPhoto",data=body.getvalue(),headers={"Content-Type":f"multipart/form-data; boundary={boundary}"}),timeout=60,context=CTX).read()); sent=res.get("ok",False); print("отправка:",sent, "" if sent else res)
+        try:
+            res=json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{TGTOK}/sendPhoto",data=body.getvalue(),headers={"Content-Type":f"multipart/form-data; boundary={boundary}"}),timeout=60,context=CTX).read()); sent=res.get("ok",False); print("отправка:",sent,"" if sent else res)
+        except urllib.error.HTTPError as e:
+            print("TG HTTP",e.code,"chat=",repr(CHAT),"tok_len=",len(TGTOK),"err:",e.read()[:200].decode(errors="replace"))
 
 # 6. удалить письмо остатков (только после успеха)
 if DRY: print("[DRY] письмо не удаляю")
