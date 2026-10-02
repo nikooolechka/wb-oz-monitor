@@ -1,0 +1,22 @@
+name: "Синхрон F/G (даты готовности -> остатки), ежечасно 07-21 МСК"
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: dategot_fg
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install google-auth requests
+      - name: Прогон
+        env:
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+        run: python dategot_fg_sync.py
