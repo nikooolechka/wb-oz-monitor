@@ -138,33 +138,44 @@ if DRY: print(f"[DRY] Свободно обновил бы: {len(used)} | нов
 else:
     gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":updates})
     print(f"обновлено Свободно: {len(used)} | новых: {len(new)} | дата {datestr}")
-    # 3b. текущие остатки в таблицу «даты готовности» колонка C (матч по артикулу+упаковка)
+    # 3b. текущие остатки в таблицу «даты готовности» — колонку ищем ПО ЗАГОЛОВКУ (устойчиво к вставке столбцов)
     try:
         DG="1pRT8ALdpE3JhJbstbigX2V48DyUMXX1awiBBnFOjChY"; DGTAB="даты готовности"
         ALIAS={"orallubrikant":"spraydlyapolostyrta"}
         def _pack(x):
             mm=re.search(r"(\d+)\s*уп",x or ""); return mm.group(1) if mm else ""
         def _canon(a): a=(a or "").strip().lower(); return ALIAS.get(a,a)
-        ov=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+chr(33)+chr(65)+chr(49)+chr(58)+chr(70)+chr(54)+chr(48))}").get("values",[])
+        orng=TAB+chr(33)+"A1:F60"
+        ov=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(orng)}").get("values",[])
         oh=ov[1]; _cN=oh.index("Номенклатура 1С"); _cA=oh.index("Артикул"); _cS=oh.index("Свободно")
         st={}; ba={}
         for rr in ov[2:]:
             if len(rr)<=_cS: continue
             aa=(rr[_cA] if len(rr)>_cA else "").strip(); nn=rr[_cN] if len(rr)>_cN else ""; vv=rr[_cS] if len(rr)>_cS else ""
             if not aa or aa.upper()=="ИТОГО": continue
-            dg2=re.sub(r"[^\d]","",str(vv)); vv=int(dg2) if dg2 else 0
+            dd=re.sub(r"[^\d]","",str(vv)); vv=int(dd) if dd else 0
             ca=_canon(aa); st[(ca,_pack(nn))]=vv; ba.setdefault(ca,[]).append(vv)
-        dgv=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+'!A1:F80')}").get("values",[])
-        up2=[]
-        for ii in range(1,len(dgv)):
-            rr=dgv[ii]; nm2=rr[0] if rr else ""; ar2=(rr[1] if len(rr)>1 else "").strip()
-            if not ar2 or ar2.lower()=="тотал" or nm2.strip().lower()=="тотал": continue
-            ca=_canon(ar2); pk=_pack(nm2); val=None
-            if (ca,pk) in st: val=st[(ca,pk)]
-            elif len(ba.get(ca,[]))==1: val=ba[ca][0]
-            up2.append({"range":f"{DGTAB}!C{ii+1}","values":[[val if val is not None else 0]]})
-        if up2: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":up2})
-        print("даты готовности: колонка C обновлена,",len(up2),"строк")
+        dgv=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+chr(33)+'A1:L80')}").get("values",[])
+        dh=[str(x).lower() for x in dgv[0]]
+        def _find(*keys):
+            for idx,h in enumerate(dh):
+                if all(k in h for k in keys): return idx
+            return None
+        i_art=_find("артикул"); i_ost=_find("остаток","сегодня"); i_nm=_find("назван")
+        if i_nm is None: i_nm=0
+        if i_art is None or i_ost is None:
+            print("даты готовности: не нашёл заголовки (артикул/остаток сегодня) — пропускаю")
+        else:
+            up2=[]
+            for ii in range(1,len(dgv)):
+                rr=dgv[ii]; nm2=rr[i_nm] if len(rr)>i_nm else ""; ar2=(rr[i_art] if len(rr)>i_art else "").strip()
+                if not ar2 or ar2.lower()=="тотал" or str(nm2).strip().lower()=="тотал": continue
+                ca=_canon(ar2); pk=_pack(nm2); val=None
+                if (ca,pk) in st: val=st[(ca,pk)]
+                elif len(ba.get(ca,[]))==1: val=ba[ca][0]
+                up2.append({"range":f"{DGTAB}!{L(i_ost)}{ii+1}","values":[[val if val is not None else 0]]})
+            if up2: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":up2})
+            print("даты готовности: остаток обновлён,",len(up2),"строк (колонка по заголовку)")
     except Exception as e:
         print("даты готовности: ошибка",str(e)[:140])
 
