@@ -48,8 +48,8 @@ except Exception as _e: pass
 
 # --- цель: клод-код «остатки» ---
 ov=gv(OST,f"{OSTTAB}!A1:H80")
-# заголовки F2/G2
-upd=[{"range":f"{OSTTAB}!F2","values":[["дата поступления"]]},{"range":f"{OSTTAB}!G2","values":[["комментарий"]]}]
+# заголовки НЕ трогаем (их ведёт владелец в строке 1) — пишем только данные
+upd=[]
 # данные с 3-й строки: Номенклатура=A(0), Артикул=B(1)
 for i in range(2,len(ov)):
     r=ov[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
