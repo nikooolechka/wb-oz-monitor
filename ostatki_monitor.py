@@ -161,7 +161,7 @@ except Exception as e: print("скрин не удался:",str(e)[:150])
 # 5. отправка
 sent=False
 if png:
-    CHAT=os.environ.get("OSTATKI_CHAT_ID") or "339473235"; TGTOK=os.environ["TELEGRAM_BOT_TOKEN"]; cap="🧬остатки на нашем складе сегодня"
+    CHAT=(os.environ.get("OSTATKI_CHAT_ID") or "339473235").strip(); TGTOK=os.environ["TELEGRAM_BOT_TOKEN"].strip(); cap="🧬остатки на нашем складе сегодня"
     if DRY: open("/tmp/ostatki_preview.png","wb").write(png); print("[DRY] скрин -> /tmp/ostatki_preview.png")
     else:
         boundary="----ost"; body=io.BytesIO()
