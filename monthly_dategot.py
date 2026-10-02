@@ -31,23 +31,23 @@ def L(i):
 def canon(a): return (a or "").strip().lower()
 
 now=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
-mon=MONTHS[now.month]; MON_UP=mon.upper()
+# 21-го числа берём потребность на СЛЕДУЮЩИЙ месяц
+tgt_num=(now.month % 12)+1
+tgt=MONTHS[tgt_num]; TGT_UP=tgt.upper()
+print("целевой месяц (следующий):",tgt)
 
-# --- 1) B1 = месяц ---
-try:
-    b=gv(DG,f"{DGTAB}!B1"); cur=(b[0][0].strip().upper() if (b and b[0] and b[0][0]) else "")
-    if cur!=MON_UP and not DRY:
-        gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+'!B1')}?valueInputOption=USER_ENTERED",{"values":[[MON_UP]]})
-        print("B1 ->",MON_UP)
-    else: print("B1:",cur or "пусто","| нужен",MON_UP,"| DRY" if DRY else "")
-except Exception as e: print("B1 ошибка:",str(e)[:120])
+# ГЕЙТ: если B1 уже = целевой месяц — значит уже загрузили, выходим (защита от повторов)
+b=gv(DG,f"{DGTAB}!B1"); b1cur=(b[0][0].strip().upper() if (b and b[0] and b[0][0]) else "")
+if b1cur==TGT_UP:
+    print("B1 уже",TGT_UP,"— уже загружено, выход"); raise SystemExit(0)
 
-# --- выбрать вкладку месяца в таблице потребности ---
+# вкладка потребности СЛЕДУЮЩЕГО месяца должна существовать (вносят до 20-го); если нет — ждём
 meta=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{POTR}?fields=sheets(properties(title,hidden))")
 vis=[p["properties"]["title"] for p in meta["sheets"] if p["properties"]["title"] in MONTHS.values() and not p["properties"].get("hidden")]
-tab=mon if mon in vis else (sorted(vis,key=lambda t:[k for k,v in MONTHS.items() if v==t][0])[-1] if vis else None)
+if tgt not in vis:
+    print(f"вкладка '{tgt}' ещё не создана — пропускаю (попробую в следующий прогон)"); raise SystemExit(0)
+tab=tgt
 print("вкладка потребности:",tab)
-if not tab: print("нет вкладки месяца — выход"); raise SystemExit(0)
 
 # --- потребность: B=артикул, D=кратно коробу, до пустой/разбивки ---
 rows=gv(POTR,f"{tab}!A1:D40"); potr={}
@@ -76,8 +76,10 @@ for i in range(1,len(dg)):
     if al in potr: upd.append({"range":f"{DGTAB}!{L(i_potr)}{i+1}","values":[[potr[al]]]}); seen.add(al)
     else: miss.append(art)
 print("потребность к записи:",len(upd),"| не нашли:",miss)
-if upd and not DRY:
-    gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":upd})
-    print("потребность записана:",len(upd))
-elif DRY: print("[DRY] не пишу")
+if not DRY:
+    if upd: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":upd})
+    # B1 = следующий месяц ТОЛЬКО после успешной записи потребности
+    gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+'!B1')}?valueInputOption=USER_ENTERED",{"values":[[TGT_UP]]})
+    print("потребность записана:",len(upd),"| B1 ->",TGT_UP)
+else: print("[DRY] не пишу, B1 был бы",TGT_UP)
 print("GOTOVO")
