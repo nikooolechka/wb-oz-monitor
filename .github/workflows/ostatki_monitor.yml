@@ -1,0 +1,29 @@
+name: Остатки 1С (почта → таблица → скрин, будни 12:10 МСК)
+
+on:
+  schedule:
+    - cron: "10 9 * * 1-5"   # 12:10 МСК по будням (письмо приходит в 12:00)
+  workflow_dispatch:
+    inputs:
+      nodelete:
+        description: "NODELETE=1 — не удалять письмо (для теста)"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install google-auth PyMuPDF Pillow
+      - name: Прогон
+        env:
+          MAILRU_APP_PASS: ${{ secrets.MAILRU_APP_PASS }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          OSTATKI_CHAT_ID: ${{ secrets.OSTATKI_CHAT_ID }}
+          NODELETE: ${{ github.event.inputs.nodelete }}
+        run: python ostatki_monitor.py
