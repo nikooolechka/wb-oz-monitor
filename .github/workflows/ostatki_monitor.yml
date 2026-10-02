@@ -1,14 +1,16 @@
 name: Остатки 1С (почта → таблица → скрин, будни 12:10 МСК)
 
 on:
-  schedule:
-    - cron: "*/10 9-10 * * 1-5"   # каждые 10 мин 12:00–13:59 МСК по будням — ловим письмо даже с задержкой (после отправки письмо удаляется, повторных постов нет)
   workflow_dispatch:
     inputs:
       nodelete:
         description: "NODELETE=1 — не удалять письмо (для теста)"
         required: false
         default: ""
+
+concurrency:
+  group: ostatki
+  cancel-in-progress: false
 
 jobs:
   run:
