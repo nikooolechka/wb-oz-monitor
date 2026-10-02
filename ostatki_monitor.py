@@ -179,12 +179,81 @@ else:
     except Exception as e:
         print("даты готовности: ошибка",str(e)[:140])
 
+    # 3c. ПРОИЗВОДСТВО (цикл 22->22): произведено = свободно(база цикла) + Σ приростов; D=потребность, H=произведено, I=%, J=шкала(SPARKLINE)
+    try:
+        OSTGID=1290662357; _AL={"orallubrikant":"spraydlyapolostyrta"}
+        def _cn(a): a=(a or "").strip().lower(); return _AL.get(a,a)
+        def _pk(s2): mm=re.search(r"(\d+)\s*уп",s2 or ""); return mm.group(1) if mm else ""
+        def _gh(p):
+            p=max(0.0,min(p,1.2)); _st=[(0.0,(0.91,0.37,0.37)),(0.5,(1.0,0.84,0.42)),(0.8,(0.80,0.84,0.45)),(0.95,(0.52,0.80,0.47)),(1.2,(0.26,0.74,0.36))]
+            for _i in range(len(_st)-1):
+                a,ca=_st[_i]; b,cb=_st[_i+1]
+                if p<=b:
+                    t=(p-a)/(b-a) if b>a else 0
+                    return "#%02X%02X%02X"%(int((ca[0]+(cb[0]-ca[0])*t)*255),int((ca[1]+(cb[1]-ca[1])*t)*255),int((ca[2]+(cb[2]-ca[2])*t)*255))
+            c=_st[-1][1]; return "#%02X%02X%02X"%(int(c[0]*255),int(c[1]*255),int(c[2]*255))
+        _n=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
+        if _n.day>=22: _cy,_cm=_n.year,_n.month
+        else:
+            _cm=_n.month-1; _cy=_n.year
+            if _cm==0: _cm=12; _cy-=1
+        cyc=f"{_cy}-{_cm:02d}"; ST="произв_стейт"
+        _m=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}?fields=sheets(properties(title))")
+        if ST not in [x["properties"]["title"] for x in _m["sheets"]]:
+            gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"addSheet":{"properties":{"title":ST,"hidden":True,"gridProperties":{"rowCount":300,"columnCount":5}}}}]})
+        stv=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}").get("values",[])
+        stm={r[0]:(n1c(r[1]),n1c(r[2]),(r[3] if len(r)>3 else "")) for r in stv if r and r[0]}
+        newst={}; prod_art={}
+        for k,(raw,sv) in items.items():
+            key=_cn(article(raw))+"|"+_pk(raw); st0=stm.get(key)
+            if (st0 is None) or (st0[2]!=cyc): prod=sv; last=sv
+            else:
+                d=sv-st0[0]; prod=st0[1]+(d if d>0 else 0); last=sv
+            newst[key]=(last,prod,cyc); _a=_cn(article(raw)); prod_art[_a]=prod_art.get(_a,0)+prod
+        strows=[[k,newst[k][0],newst[k][1],newst[k][2]] for k in newst]
+        gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}:clear",{})
+        if strows: gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1')}?valueInputOption=USER_ENTERED",{"values":strows})
+        _dg=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+chr(33)+'A1:L80')}").get("values",[])
+        _dh=[str(x).lower() for x in _dg[0]]
+        def _fd(*kk):
+            for i,h in enumerate(_dh):
+                if all(x in h for x in kk): return i
+            return None
+        _ia=_fd("артикул"); _ip=_fd("потребность"); potra={}
+        for r in _dg[1:]:
+            a=(r[_ia] if len(r)>_ia else "").strip()
+            if not a or a.lower()=="тотал": continue
+            v=n1c(r[_ip] if len(r)>_ip else ""); c=_cn(a)
+            if c not in potra and v: potra[c]=v
+        # расширить сетку до 11 столбцов (бар D + служебные H/I/J)
+        gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":OSTGID,"gridProperties":{"columnCount":11}},"fields":"gridProperties.columnCount"}}]})
+        ov2=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+chr(33)+'A1:K80')}").get("values",[])
+        seen=set(); vw=[{"range":f"{TAB}!D1","values":[["шкала выполнения относительно потребности"]]},{"range":f"{TAB}!I1","values":[["потребность"]]},{"range":f"{TAB}!J1","values":[["% выполнения"]]}]; fmt=[]
+        for i in range(2,len(ov2)):
+            r=ov2[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
+            if not art or art.upper()=="ИТОГО" or str(nm).strip().upper()=="ИТОГО": continue
+            c=_cn(art)
+            if c in seen: continue
+            seen.add(c); row=i+1; pot=potra.get(c); prod=prod_art.get(c,0)
+            vw.append({"range":f"{TAB}!H{row}","values":[[prod]]})          # произведено (служебн.)
+            vw.append({"range":f"{TAB}!I{row}","values":[[pot if pot is not None else ""]]})  # потребность (служебн.)
+            if pot:
+                pct=prod/pot; vw.append({"range":f"{TAB}!J{row}","values":[[pct]]})           # % (служебн.)
+                col=_gh(pct)
+                vw.append({"range":f"{TAB}!D{row}","values":[['=SPARKLINE(H'+str(row)+'/I'+str(row)+';{"charttype"\\"bar";"max"\\1;"color1"\\"'+col+'";"empty"\\"zero"})']]})  # БАР в D
+                fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":i,"endRowIndex":i+1,"startColumnIndex":9,"endColumnIndex":10},"cell":{"userEnteredFormat":{"numberFormat":{"type":"PERCENT","pattern":"0%"}}},"fields":"userEnteredFormat.numberFormat"}})
+        gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":vw})
+        if fmt: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":fmt})
+        print("производство: D/H/%/шкала,",len(seen),"арт | цикл",cyc)
+    except Exception as e:
+        print("производство: ошибка",str(e)[:140])
+
 # 4. скрин: ВСЕ строки + ВСЕ столбцы (до последнего с данными)
 png=None
 try:
     import fitz; from PIL import Image
     lastcol=max((len(r) for r in vals), default=cS+1)
-    rng=f"A1:{L(lastcol-1)}{last_row}"
+    rng=f"A1:G{last_row}"  # служебные H/I/J (произв/потребн/%) в скрин НЕ включаем
     params={"format":"pdf","gid":str(GID),"range":rng,"portrait":"true","fitw":"true","gridlines":"false","sheetnames":"false","printtitle":"false","pagenumbers":"false","top_margin":"0.1","bottom_margin":"0.1","left_margin":"0.1","right_margin":"0.1"}
     url=f"https://docs.google.com/spreadsheets/d/{SID}/export?"+urllib.parse.urlencode(params)
     pdf=urllib.request.urlopen(urllib.request.Request(url,headers={"Authorization":"Bearer "+TOK}),timeout=90,context=CTX).read()
