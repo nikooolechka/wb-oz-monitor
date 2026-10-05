@@ -127,21 +127,31 @@ def wb_fbo_stocks():
     return {("WBFBO", "ВБ FBO", "склады WB (все)", ""): total}
 
 
-# ---------- Ozon FBS (сумма) ----------
-def oz_fbs_total():
-    total = 0; cursor = ""
+# ---------- Ozon FBS: остаток ПО АРТИКУЛАМ (алерт о НИЗКОМ остатке, не о приходе) ----------
+def oz_thr(offer):
+    o = (offer or "").lower()
+    if "dental" in o: return 100                                 # денталы
+    if ("oral" in o) or (o == "spraydlyapolostyrta"): return 100 # 18+ орал-спреи
+    return 20                                                    # остальное
+
+def oz_fbs_per_article():
+    out = {}; cursor = ""
     for _ in range(30):
         d = _oz("/v4/product/info/stocks", {"filter": {"visibility": "ALL"}, "limit": 1000, "cursor": cursor})
         items = d.get("items") or d.get("result", {}).get("items", [])
         for it in items:
+            oid = it.get("offer_id") or ""
+            pres = None
             for s in it.get("stocks", []):
                 if s.get("type") == "fbs":
-                    total += s.get("present", 0) or 0
+                    pres = (pres or 0) + (s.get("present", 0) or 0)
+            if oid and pres is not None:
+                out[oid] = out.get(oid, 0) + pres
         cursor = d.get("cursor", "")
         if not cursor or not items:
             break
         time.sleep(0.2)
-    return {("OZFBS", "Озон FBS", "FBS", ""): total}
+    return out
 
 
 # ---------- Ozon FBO по складам ----------
@@ -175,7 +185,7 @@ def main():
     current = {}
     # FBO отключён по решению владельца (2026-09-11): «будет каша» — Ozon/WB перекладывают
     # товар между десятками РФЦ, суммарный сигнал невнятный. Оставлен ТОЛЬКО FBS (по складам).
-    for fn in (wb_fbs_stocks, oz_fbs_total):
+    for fn in (wb_fbs_stocks,):
         try:
             current.update(fn())
         except Exception as e:
@@ -198,11 +208,21 @@ def main():
             if "FBS" in scheme and wid:  # WB FBS — конкретный склад/ФФ (есть id и название)
                 alerts.append(f"<b>Товар приехал на склад {name} ({scheme}): {qty} шт остатка.</b>\n"
                               f"Склад {wid} готов к заказам.")
-            elif "FBS" in scheme:  # Ozon FBS — агрегат; склад/город API не отдаёт (warehouse_ids пустой) -> без пустой строки
-                alerts.append(f"<b>{scheme}: приехало +{delta} шт (всего {qty} шт готово к заказам).</b>")
             else:  # FBO — поставка на маркетплейс (сумма по платформе)
                 alerts.append(f"<b>Поставка принята: {scheme} — +{delta} шт (всего {qty} на складах).</b>")
         st[key] = qty
+    # Ozon FBS — алерт НЕ на приход, а на НИЗКИЙ остаток (близко к нулю), ПО АРТИКУЛАМ.
+    # Пороги: денталы <100, 18+ орал-спреи <100, остальное <20. Алерт ОДИН раз на переходе в "мало"
+    # (был >=порога -> стал <порога), без спама; восстановится выше порога -> снова вооружён.
+    try:
+        for offer, present in oz_fbs_per_article().items():
+            thr = oz_thr(offer); k = f"OZFBS|{offer}"; last = st.get(k)
+            if initialized and last is not None and last >= thr and present < thr:
+                alerts.append(f"<b>⚠️ Озон FBS заканчивается: {offer} — {present} шт (порог {thr}).</b>")
+            print(f"  OZ-FBS   {offer[:24]:24} fbs={present} (было {last}) порог={thr}")
+            st[k] = present
+    except Exception as _e:
+        print("Ozon FBS low-stock упал:", str(_e)[:80])
     st["_init"] = True
 
     if not initialized:
