@@ -90,6 +90,7 @@ def wb_fbs_stocks():
     out = {}
     for w in whs:
         wid = w.get("id"); name = w.get("name") or str(wid)
+        if "краснодар" in (name or "").lower(): continue  # наш собственный склад (НЕ фулфилмент) — приходы сюда не алертим
         total = 0
         for i in range(0, len(barcodes), 1000):
             try:
@@ -194,9 +195,11 @@ def main():
         print(f"  {scheme:8} {name[:24]:24} остаток={qty} (было {last}) {'ПРИХОД' if grew and initialized else ''}")
         if initialized and grew:
             delta = qty - last if last is not None else qty
-            if "FBS" in scheme:
+            if "FBS" in scheme and wid:  # WB FBS — конкретный склад/ФФ (есть id и название)
                 alerts.append(f"<b>Товар приехал на склад {name} ({scheme}): {qty} шт остатка.</b>\n"
                               f"Склад {wid} готов к заказам.")
+            elif "FBS" in scheme:  # Ozon FBS — агрегат; склад/город API не отдаёт (warehouse_ids пустой) -> без пустой строки
+                alerts.append(f"<b>{scheme}: приехало +{delta} шт (всего {qty} шт готово к заказам).</b>")
             else:  # FBO — поставка на маркетплейс (сумма по платформе)
                 alerts.append(f"<b>Поставка принята: {scheme} — +{delta} шт (всего {qty} на складах).</b>")
         st[key] = qty
