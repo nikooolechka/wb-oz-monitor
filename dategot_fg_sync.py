@@ -41,9 +41,14 @@ for r in dg[1:]:
     src[(canon(art),pack(nm))]=(dt,note)
 print("источник F/G:",len(src))
 
-# --- расширить сетку вкладки «остатки» до >=8 столбцов (G может быть за пределами) ---
+# --- сетку вкладки «остатки» ТОЛЬКО РАСШИРЯЕМ, НИКОГДА не ужимаем: ужатие до 8 срезало служебные
+#     колонки I(потребность)/J(%), на которые опиралась шкала ostatki_monitor -> #REF! в скрине отдела
+#     (разбор 05.10.2026). Расширяем только если колонок меньше 8. ---
 try:
-    gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{OST}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":1290662357,"gridProperties":{"columnCount":8}},"fields":"gridProperties.columnCount"}}]})
+    _m=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{OST}?fields=sheets(properties(sheetId,gridProperties(columnCount)))")
+    _cc=next((s["properties"]["gridProperties"]["columnCount"] for s in _m["sheets"] if s["properties"]["sheetId"]==1290662357),8)
+    if _cc<8:
+        gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{OST}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":1290662357,"gridProperties":{"columnCount":11}},"fields":"gridProperties.columnCount"}}]})
 except Exception as _e: pass
 
 # --- цель: клод-код «остатки» ---
