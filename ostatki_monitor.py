@@ -240,8 +240,13 @@ else:
             if pot:
                 pct=prod/pot; vw.append({"range":f"{TAB}!J{row}","values":[[pct]]})           # % (служебн.)
                 col=_gh(pct)
-                vw.append({"range":f"{TAB}!D{row}","values":[['=SPARKLINE(H'+str(row)+'/I'+str(row)+';{"charttype"\\"bar";"max"\\1;"color1"\\"'+col+'";"empty"\\"zero"})']]})  # БАР в D
+                bar=max(0,min(int(round(pct*100)),100))   # доля заливки 0..100 ЛИТЕРАЛОМ в формулу
+                # число зашито ПРЯМО в SPARKLINE, без ссылок на H/I -> шкала НЕ ломается (#REF!), если владелец
+                # удалит/сдвинет служебные колонки потребность/%. Цвет-градиент — по реальному pct.
+                vw.append({"range":f"{TAB}!D{row}","values":[['=SPARKLINE('+str(bar)+';{"charttype"\\"bar";"max"\\100;"color1"\\"'+col+'";"empty"\\"zero"})']]})  # БАР в D (самодостаточный)
                 fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":i,"endRowIndex":i+1,"startColumnIndex":9,"endColumnIndex":10},"cell":{"userEnteredFormat":{"numberFormat":{"type":"PERCENT","pattern":"0%"}}},"fields":"userEnteredFormat.numberFormat"}})
+            else:
+                vw.append({"range":f"{TAB}!D{row}","values":[[""]]})   # нет потребности -> чистим шкалу (не оставляем #REF!)
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":vw})
         if fmt: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":fmt})
         print("производство: D/H/%/шкала,",len(seen),"арт | цикл",cyc)
