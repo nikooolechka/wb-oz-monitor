@@ -123,20 +123,25 @@ for ri in range(2,len(vals)):
             updates.append({"range":f"{TAB}!{L(cN)}{ri+1}","values":[[raw]]})
     elif art:  # артикул есть, в письме нет -> 0
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[0]]})
-# новые (в письме, нет в листе) -> дописать
+# новые (в письме, нет в листе) -> дописать строкой; Артикул = ЖИРНОЕ "новая позиция",
+# чтобы владелец увидела в скрине и прислала настоящий артикул. Шкалы у новой строки НЕТ
+# (нет потребности -> D пустая, без ошибки). Свободно всё равно собираем и показываем.
 new=[(k,items[k]) for k in items if k not in used]
 rowbase=last_data_row+1
+newfmt=[]
 for j,(k,(raw,sv)) in enumerate(new):
     rr=rowbase+j
     updates.append({"range":f"{TAB}!{L(cN)}{rr}","values":[[raw]]})
-    updates.append({"range":f"{TAB}!{L(cA)}{rr}","values":[[article(raw)]]})
+    updates.append({"range":f"{TAB}!{L(cA)}{rr}","values":[["новая позиция"]]})
     updates.append({"range":f"{TAB}!{L(cS)}{rr}","values":[[sv]]})
+    newfmt.append({"repeatCell":{"range":{"sheetId":1290662357,"startRowIndex":rr-1,"endRowIndex":rr,"startColumnIndex":cA,"endColumnIndex":cA+1},"cell":{"userEnteredFormat":{"textFormat":{"bold":True}}},"fields":"userEnteredFormat.textFormat.bold"}})
 last_row = rowbase+len(new)-1 if new else last_data_row
 # ИТОГО переносим в самый низ? оставим где есть. last_row для скрина:
 last_row=max(last_row, len(vals))
 if DRY: print(f"[DRY] Свободно обновил бы: {len(used)} | новых: {len(new)} | дата {datestr}")
 else:
     gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":updates})
+    if newfmt: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":newfmt})
     print(f"обновлено Свободно: {len(used)} | новых: {len(new)} | дата {datestr}")
     # 3b. текущие остатки в таблицу «даты готовности» — колонку ищем ПО ЗАГОЛОВКУ (устойчиво к вставке столбцов)
     try:
