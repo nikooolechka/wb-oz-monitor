@@ -105,21 +105,33 @@ vals=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{ur
 hdr=vals[1]; cN=hdr.index("Номенклатура 1С"); cA=hdr.index("Артикул"); cS=hdr.index("Свободно")
 updates=[{"range":f"{TAB}!A1","values":[[title]]}]
 used=set(); last_data_row=2
+# СТРОГИЙ КЛЮЧ матча = (артикул + упаковка Nуп): устойчив к порядку строк и вариациям имени,
+# ФИЗИЧЕСКИ исключает перестановку значений (денталы 24/80 — один артикул, разные короба). См. память.
+def _pak(s): mm=re.search(r"(\d+)\s*уп",s or ""); return mm.group(1) if mm else ""
+def _can(a): a=(a or "").strip().lower(); return {"orallubrikant":"spraydlyapolostyrta"}.get(a,a)
+ekey={}; edup=set()
+for _k,(raw,sv) in items.items():
+    ea=_can(article(raw))
+    if ea:
+        _kk=(ea,_pak(raw))
+        if _kk in ekey: edup.add(_kk)
+        ekey[_kk]=_k
 for ri in range(2,len(vals)):
     row=vals[ri]; nm=row[cN] if len(row)>cN else ""; art=row[cA] if len(row)>cA else ""
     if not (nm or art): continue
     if nm.strip().upper()=="ИТОГО":
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[total]]}); continue
     last_data_row=ri+1
-    kn=norm(nm); matched=None
-    if kn and kn in items and kn not in used: matched=kn
-    elif art:
-        for k in by_art.get(art,[]):
-            if k not in used: matched=k; break
+    matched=None; sk=(_can(art),_pak(nm))
+    if sk[0] and sk in ekey and sk not in edup and ekey[sk] not in used:
+        matched=ekey[sk]                                   # 1) строгий ключ артикул+упаковка
+    if matched is None:
+        kn=norm(nm)
+        if kn and kn in items and kn not in used: matched=kn   # 2) запас — по наименованию
     if matched:
         raw,sv=items[matched]; used.add(matched)
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[sv]]})
-        if norm(raw)!=kn:  # номенклатура пустая/иная -> подставляю реальную из письма
+        if norm(raw)!=norm(nm):  # номенклатура пустая/иная -> подставляю реальную из письма
             updates.append({"range":f"{TAB}!{L(cN)}{ri+1}","values":[[raw]]})
     elif art:  # артикул есть, в письме нет -> 0
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[0]]})
@@ -143,6 +155,26 @@ else:
     gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":updates})
     if newfmt: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":newfmt})
     print(f"обновлено Свободно: {len(used)} | новых: {len(new)} | дата {datestr}")
+    # САМОПРОВЕРКА (авто, БЕЗ алертов владельцу): перечитываю записанное и сверяю сумму И ПОСТРОЧНО.
+    # Не сошлось -> скрин НЕ шлю и письмо НЕ удаляю -> следующий поток (кажд.10 мин/завтра) переиграет сам.
+    try:
+        _bk=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+'!A1:L120')}?valueRenderOption=UNFORMATTED_VALUE").get("values",[])
+        _bad=[]; _bsum=0
+        for _ri in range(2,len(_bk)):
+            _r=_bk[_ri]; _nm=_r[cN] if len(_r)>cN else ""; _at=_r[cA] if len(_r)>cA else ""
+            if not(str(_nm).strip() or str(_at).strip()) or str(_nm).strip().upper()=="ИТОГО": continue
+            _sv=n1c(_r[cS] if len(_r)>cS else 0); _bsum+=_sv
+            _sk=(_can(_at),_pak(_nm))
+            if _sk[0] and _sk in ekey and _sk not in edup:
+                _exp=items[ekey[_sk]][1]
+                if _sv!=_exp: _bad.append((_at,_pak(_nm),_sv,_exp))
+        if (total is not None and _bsum!=total) or _bad:
+            print(f"САМОПРОВЕРКА НЕ ПРОШЛА — скрин НЕ шлю, письмо НЕ удаляю. сумма={_bsum} итог={total} несоответствий={len(_bad)} {_bad[:6]}")
+            M.logout(); raise SystemExit(1)
+        print(f"самопроверка ОК: сумма {_bsum} == итог {total}, построчно сошлось ({len(used)} позиций)")
+    except SystemExit: raise
+    except Exception as _e:
+        print("самопроверка: ошибка чтения (не блокирую отправку):",str(_e)[:100])
     # 3b. текущие остатки в таблицу «даты готовности» — колонку ищем ПО ЗАГОЛОВКУ (устойчиво к вставке столбцов)
     try:
         DG="1pRT8ALdpE3JhJbstbigX2V48DyUMXX1awiBBnFOjChY"; DGTAB="даты готовности"
