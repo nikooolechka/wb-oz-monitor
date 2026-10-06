@@ -123,12 +123,19 @@ def main():
         t = THRn.get(an(art))
         if not t: continue
         thr = t[COL[city]]; key = f"{city}|{an(art)}"
-        prev = st.get(key, {}); prev_last = prev.get("last"); alerted = prev.get("alerted", False)
-        if qty >= thr: alerted = False                       # выше порога -> снова вооружён
-        elif prev_last == 0 and qty > 0: alerted = False     # появился из 0 -> пристальная слежка
-        if qty < thr and not alerted:
-            drops.append((ORDER[city], CITY[city], art, qty, thr)); alerted = True
-        st[key] = {"last": qty, "alerted": alerted}
+        phase = st.get(key, {}).get("phase", "armed")
+        alert = False
+        if qty >= thr:
+            phase = "armed"                                  # выше порога -> снова вооружён (слежка)
+        else:                                                # ниже порога
+            if phase == "armed":
+                alert = True; phase = "alerted_low"          # алерт №1: впервые пересёк порог вниз
+            elif phase == "alerted_low" and qty == 0:
+                alert = True; phase = "alerted_zero"         # алерт №2: дошёл до 0
+            # иначе (медленно убывает / уже 0) -> молчим, без спама
+        if alert:
+            drops.append((ORDER[city], CITY[city], art, qty, thr))
+        st[key] = {"last": qty, "phase": phase}
     if drops:
         drops.sort(key=lambda x: (x[0], -x[4], x[2]))
         by_city = {}
