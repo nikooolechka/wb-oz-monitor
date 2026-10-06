@@ -131,11 +131,16 @@ def main():
         st[key] = {"last": qty, "alerted": alerted}
     if drops:
         drops.sort(key=lambda x: (x[0], -x[4], x[2]))
-        lines = ["🍟 <b>WB ФФ — просели остатки, пора планировать поставку:</b>"]
-        for _, gorod, art, qty, thr in drops:
-            lines.append(f"• {gorod} — {art}: {qty} шт (порог {thr})")
-        lines.append("@Ira_Zorina")
-        msg = "\n".join(lines)
+        by_city = {}
+        for order, gorod, art, qty, thr in drops:
+            by_city.setdefault((order, gorod), []).append((art, qty, thr))
+        blocks = []
+        for kc in sorted(by_city):
+            ls = [f"🍟 <b>WB ФФ {kc[1]} остатки ниже порога:</b>"]
+            for art, qty, thr in by_city[kc]:
+                ls.append(f"• {art}: {qty} шт (порог {thr})")
+            blocks.append("\n".join(ls))
+        msg = "\n\n".join(blocks) + "\n\n@Ira_Zorina пора планировать поставку!"
         print("ALERT:\n" + msg)
         if not DRY: tg(msg)
     else:
