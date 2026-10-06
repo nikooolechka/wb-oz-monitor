@@ -124,6 +124,16 @@
       "status": "high",
       "oz_dims": "14,2×11,6×6,2",
       "oz_vol": 1.021
+    },
+    "irrigator_new_05": {
+      "status": "ok",
+      "oz_dims": "24,5×7×6,5",
+      "oz_vol": 1.115
+    },
+    "irrigator_new_1": {
+      "status": "low",
+      "oz_dims": "26×8,5×8,5",
+      "oz_vol": 1.879
     }
   }
 }
