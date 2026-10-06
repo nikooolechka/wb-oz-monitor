@@ -104,69 +104,6 @@ def wb_fbs_stocks():
     return out
 
 
-# ---------- WB ФФ: НИЗКИЙ остаток по артикулам на каждом ФФ-складе (14-дн оборачиваемость) ----------
-import re as _re
-def _an(s): return _re.sub(r"[^a-z0-9]", "", (s or "").lower())
-# порог: артикул -> (мск/Карго Софьино, казань, екб). Остаток на ОДНОМ складе ниже -> алерт.
-WBFF_THR = {
-    "Dental20":(280,100,100), "Dental_40":(300,70,90), "Dental_100":(560,200,200), "Dental50":(140,20,20),
-    "Dental_20_zemlyanika":(140,60,60), "Dental_40_zemlyanika":(140,40,40), "Dental_100_zemlyanika":(140,50,50),
-    "Dental_100_banan":(100,50,50), "Dental_40_natural":(250,50,60), "extract_romashka":(54,54,54),
-    "extract_pihta":(54,54,54), "makeup_50":(54,54,54), "CrioGel1l":(5,5,5), "Crio_L25(new)":(10,5,5),
-    "CrioL50":(20,5,5), "cryolipolysis25":(10,3,3), "Cryolipolysis50":(10,3,3),
-    "spraydlyapolostyrta":(110,30,50), "Oral_cherry":(42,42,42),
-}
-WBFF_THRn = {_an(k): v for k, v in WBFF_THR.items()}
-WBFF_CITY = {"мск":"Москва", "казань":"Казань", "екб":"Екатеринбург"}
-def _wb_city(name):
-    n = (name or "").lower()
-    if "краснодар" in n: return None
-    if "софьино" in n or "карго" in n: return "мск"
-    if "казан" in n: return "казань"
-    if "екб" in n or "екат" in n or "черняхов" in n: return "екб"
-    return None
-def wb_ff_lowstock(st, initialized, alerts):
-    whs = _wb(f"{MP}/api/v3/warehouses")
-    bc2art = {}; cursor = {"limit": 1000}
-    for _ in range(30):
-        d = _wb(f"{CONTENT}/content/v2/get/cards/list", "POST", {"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}})
-        cards = d.get("cards", [])
-        for c in cards:
-            vc = c.get("vendorCode", "")
-            for s in c.get("sizes", []):
-                for bc in s.get("skus", []):
-                    if bc: bc2art[str(bc)] = vc
-        cur = d.get("cursor", {})
-        if len(cards) < 1000: break
-        cursor = {"limit": 1000, "updatedAt": cur.get("updatedAt"), "nmID": cur.get("nmID")}
-        time.sleep(0.3)
-    allbc = list(bc2art)
-    COL = {"мск":0, "казань":1, "екб":2}
-    for w in whs:
-        city = _wb_city(w.get("name"))
-        if not city: continue
-        wid = w.get("id"); per = {}
-        for i in range(0, len(allbc), 1000):
-            for _try in range(2):
-                try:
-                    stx = _wb(f"{MP}/api/v3/stocks/{wid}", "POST", {"skus": allbc[i:i+1000]})
-                    for s in stx.get("stocks", []):
-                        a = bc2art.get(str(s.get("sku")), ""); per[a] = per.get(a, 0) + (s.get("amount", 0) or 0)
-                    break
-                except Exception as e:
-                    print("wb ff stock err", wid, str(e)[:40]); time.sleep(20)  # 429 -> пауза, один ретрай
-            time.sleep(2)   # пауза между батчами (WB лимит)
-        for art, qty in per.items():
-            t = WBFF_THRn.get(_an(art))
-            if not t: continue
-            thr = t[COL[city]]; k = f"WBFF|{city}|{_an(art)}"; last = st.get(k)
-            if initialized and last is not None and last >= thr and qty < thr:  # падение ниже порога (без спама; первый прогон — тихая база)
-                alerts.append(f"\U0001F35F <b>WB ФФ {WBFF_CITY[city]} — {art} остаток {qty} шт, ниже порога {thr}.</b>\n@Ira_Zorina пора планировать поставку!")
-            print(f"  WBFF {city:7} {art[:22]:22} ост={qty} порог={thr} (было {last})")
-            st[k] = qty
-        time.sleep(2)
-
-
 # ---------- WB FBO: остаток по складам WB (warehouse_remains, async) ----------
 def wb_fbo_stocks():
     base = f"{ANALYTICS}/api/v1/warehouse_remains"
@@ -286,11 +223,6 @@ def main():
             st[k] = present
     except Exception as _e:
         print("Ozon FBS low-stock упал:", str(_e)[:80])
-    # WB ФФ — низкий остаток по артикулам на каждом ФФ-складе (пороги 14-дн оборачиваемости)
-    try:
-        wb_ff_lowstock(st, initialized, alerts)
-    except Exception as _e:
-        print("WB FF low-stock упал:", str(_e)[:80])
     st["_init"] = True
 
     if not initialized:
