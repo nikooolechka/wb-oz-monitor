@@ -1,218 +1,218 @@
 {
   "мск|dental20": {
     "last": 84,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|dental20zemlyanika": {
     "last": 523,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|dental50": {
     "last": 254,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|dental100zemlyanika": {
     "last": 290,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|dental100banan": {
     "last": 50,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|criol25new": {
     "last": 21,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|criol50": {
     "last": 3,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|cryolipolysis25": {
     "last": 9,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|cryolipolysis50": {
     "last": 5,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|criogel1l": {
     "last": 19,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|spraydlyapolostyrta": {
     "last": 255,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|oralcherry": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "мск|dental40natural": {
     "last": 106,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "мск|dental40": {
     "last": 481,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|dental40zemlyanika": {
     "last": 376,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|extractpihta": {
     "last": 63,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|extractromashka": {
     "last": 71,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|makeup50": {
     "last": 103,
-    "alerted": false
+    "phase": "armed"
   },
   "мск|dental100": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "екб|dental20": {
     "last": 64,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|dental20zemlyanika": {
     "last": 121,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|dental50": {
     "last": 41,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|dental100banan": {
     "last": 36,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|criol25new": {
     "last": 5,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|criol50": {
     "last": 2,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|cryolipolysis25": {
     "last": 2,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|cryolipolysis50": {
     "last": 2,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|criogel1l": {
     "last": 4,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|spraydlyapolostyrta": {
     "last": 69,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|dental40natural": {
     "last": 219,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|dental40": {
     "last": 230,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|dental40zemlyanika": {
     "last": 174,
-    "alerted": false
+    "phase": "armed"
   },
   "екб|extractpihta": {
     "last": 18,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|extractromashka": {
     "last": 50,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "екб|makeup50": {
     "last": 54,
-    "alerted": false
+    "phase": "armed"
   },
   "казань|dental20": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "казань|dental20zemlyanika": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "казань|dental50": {
     "last": 2,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|dental100zemlyanika": {
     "last": 12,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|dental100banan": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "казань|criol25new": {
     "last": 9,
-    "alerted": false
+    "phase": "armed"
   },
   "казань|criol50": {
     "last": 4,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|cryolipolysis25": {
     "last": 2,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|cryolipolysis50": {
     "last": 1,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|criogel1l": {
     "last": 4,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|spraydlyapolostyrta": {
     "last": 75,
-    "alerted": false
+    "phase": "armed"
   },
   "казань|oralcherry": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   },
   "казань|dental40natural": {
     "last": 7,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|dental40": {
     "last": 14,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|dental40zemlyanika": {
     "last": 9,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|extractpihta": {
     "last": 31,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|extractromashka": {
     "last": 37,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|makeup50": {
     "last": 22,
-    "alerted": true
+    "phase": "alerted_low"
   },
   "казань|dental100": {
     "last": 0,
-    "alerted": true
+    "phase": "alerted_zero"
   }
 }
