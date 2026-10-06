@@ -16,9 +16,9 @@
       "pct": 0
     },
     "Dental_40_natural": {
-      "status": "high",
-      "wb_vol": 0.599,
-      "pct": 27
+      "status": "ok",
+      "wb_vol": 0.49,
+      "pct": 4
     },
     "Irrigator_1000": {
       "status": "ok",
