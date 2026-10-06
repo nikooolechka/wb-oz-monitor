@@ -1,0 +1,40 @@
+name: "WB ФФ low-stock (будни 10:00 МСК)"
+on:
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = не слать и не сохранять (тест)"
+        default: ""
+  schedule:
+    - cron: "0 7 * * 1-5"   # 10:00 МСК будни — ДУБЛЁР (основной - Яндекс-таймер)
+permissions:
+  contents: write
+concurrency:
+  group: wb-ff-lowstock
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: WB FF low-stock
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY: ${{ github.event.inputs.dry }}
+        run: python wb_ff_lowstock.py
+      - name: commit state
+        if: ${{ github.event.inputs.dry != '1' }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add data/wb_ff_state.json || true
+          git commit -m "wb_ff state [skip ci]" || { echo "no change"; exit 0; }
+          for i in 1 2 3; do
+            git pull --rebase --autostash && git push && exit 0 || sleep 5
+          done
+          echo "push failed after retries"
