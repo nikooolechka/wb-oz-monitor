@@ -327,8 +327,16 @@ if png:
 # 6. удалить письмо остатков (только после успеха)
 if DRY: print("[DRY] письмо не удаляю")
 elif sent and os.environ.get("NODELETE")!="1":
-    for u in ost_uids: M.store(u,"+FLAGS","\\Deleted")
-    M.expunge(); print(f"удалено писем остатков: {len(ost_uids)}")
+    # НЕ уничтожаем письмо: ПЕРЕМЕЩАЕМ в Корзину (аудит — всегда можно поднять первоисточник 1С).
+    # Если перенос не удался — письмо ОСТАВЛЯЕМ в INBOX (не expunge), чтобы не потерять.
+    TRASH="&BBoEPgRABDcEOAQ9BDA-"  # Корзина (IMAP modified UTF-7)
+    moved=0
+    for u in ost_uids:
+        try:
+            M.copy(u,TRASH); M.store(u,"+FLAGS","\\Deleted"); moved+=1
+        except Exception as _e:
+            print("перенос в Корзину не удался, оставляю в INBOX:",str(_e)[:90])
+    M.expunge(); print(f"писем остатков перенесено в Корзину: {moved}/{len(ost_uids)}")
 elif os.environ.get("NODELETE")=="1": print("NODELETE=1 — письмо сохранено")
 else: print("отправка не прошла — письмо НЕ удаляю")
 M.logout(); print("GOTOVO")
