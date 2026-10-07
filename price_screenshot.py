@@ -192,6 +192,36 @@ def main():
               f"(про сбой сообщит сторож в канал)", flush=True)
         return
 
+    # ЗАЩИТА (2026-10-07): если парсер сломался и СПП ушёл в МИНУС по многим строкам
+    # (баг «схватил зачёркнутую было» → D>C), НЕ шлём скрин в отдел — лучше без скрина,
+    # чем с мусором. Триггер = >=3 отрицательных в блоке (один списанный товар не блокирует).
+    try:
+        svc_chk = build("sheets", "v4", credentials=_creds(
+            ["https://www.googleapis.com/auth/spreadsheets.readonly"]), cache_discovery=False)
+        chk = svc_chk.spreadsheets().values().batchGet(
+            spreadsheetId=SHEET,
+            ranges=["Лист1!F2:F80", "Лист1!M2:M80", "Лист1!S2:S80"]).execute()
+        bad = []
+        for name, vr in zip(["ВБ", "Озон", "ЯМ"], chk.get("valueRanges", [])):
+            neg = 0
+            for row in vr.get("values", []):
+                if not row:
+                    continue
+                s = str(row[0]).replace("%", "").replace("\u00a0", "").replace(" ", "").replace(",", ".").strip()
+                try:
+                    if float(s) < 0:
+                        neg += 1
+                except ValueError:
+                    continue
+            if neg >= 3:
+                bad.append(f"{name}({neg})")
+        if bad:
+            print(f"[screenshot] ОТРИЦАТЕЛЬНЫЙ СПП по многим строкам: {', '.join(bad)} — "
+                  f"данные битые, скрин в отдел НЕ шлю", flush=True)
+            return
+    except Exception as e:
+        print(f"[screenshot] проверка СПП не удалась ({e}) — продолжаю", flush=True)
+
     # свежо — собираем скрины и шлём альбомом
     creds = _creds(["https://www.googleapis.com/auth/drive.readonly",
                     "https://www.googleapis.com/auth/spreadsheets.readonly"])
