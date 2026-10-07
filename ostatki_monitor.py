@@ -75,9 +75,9 @@ def cells(tr): return [re.sub(r"\s+"," ",html.unescape(re.sub(r"<[^>]+>"," ",c))
 items={}; total=None
 for tr in re.findall(r"<tr[^>]*>(.*?)</tr>",htmltext,re.S|re.I):
     c=cells(tr)
-    if len(c)==9 and c[0].startswith("Шпиндовск"): total=n1c(c[3]); continue
+    if len(c)==9 and c[0].startswith("Шпиндовск"): total=n1c(c[6]); continue  # С склада гот.прод. (правый блок), НЕ Итого
     if len(c)!=10 or not c[0] or c[0]=="Номенклатура, Артикул": continue
-    items[norm(c[0])]=(c[0],n1c(c[4]))
+    items[norm(c[0])]=(c[0],n1c(c[7]))  # ТОЛЬКО Свободно «Склад готовой продукции ИП Шпиндовский» (правый блок idx7), НЕ Итого idx4
 svsum=sum(v[1] for v in items.values())
 print(f"товаров: {len(items)} | сумма Свободно: {svsum} | итог 1С: {total}")
 if total is not None and svsum!=total: print("СВЕРКА НЕ СОШЛАСЬ — не пишу"); M.logout(); raise SystemExit(1)
