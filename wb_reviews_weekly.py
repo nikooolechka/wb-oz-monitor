@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Еженедельная сводка отзывов WB в канал + пополнение архива.
-Понедельник 15:00 МСК: считает прошлую неделю (пн–вс), шлёт сводку в «АС Фарм изменения»,
-и дописывает новые отзывы в архив-таблицу (дедуп по id, без повторов).
-DRY=1 — всё считает и печатает, но в канал НЕ шлёт (для теста)."""
+"""Отзывы WB: ежедневный сбор в архив + понедельничная сводка в канал.
+
+Как считаем (важно, 2026-10-08): отчёт за неделю строится ИЗ АРХИВА (вкладка
+reviews_wb), а не из одного живого прогона. В архиве лежат ВСЕ отзывы, включая
+БЕЗ ТЕКСТА (оценки-звёзды) — их в ~4 раза больше текстовых, и раньше они не
+попадали в счёт, т.к. отчёт уходил с первого прогона до того, как архив добирал
+их на поздних заходах. Теперь:
+  • сбор в архив гоняется ЕЖЕДНЕВНО (мягко, на 429 не падаем) → к понедельнику
+    прошлая неделя в архиве полная;
+  • сводка (ТОЛЬКО по понедельникам) считает прошлую неделю ИЗ АРХИВА → полный счёт.
+MODE=archive  — только собрать в архив (без отчёта), для ежедневных прогонов.
+MODE=report   — собрать + в понедельник прислать сводку (дефолт).
+DRY=1         — всё посчитать и показать в логе, но в канал НЕ слать."""
 import os, json, ssl, time, urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
@@ -13,16 +22,20 @@ SHEET = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"
 WB_TAB = "reviews_wb"
 CTX = ssl._create_unverified_context()
 DRY = os.environ.get("DRY") == "1"
+MODE = (os.environ.get("MODE") or "report").strip().lower()
+MSK = timezone(timedelta(hours=3))
 
 
 def wb_fetch(days=14):
+    """Тянет отзывы за N дней. На 429 — ОДИН повтор после паузы, потом мягко сдаётся
+    (возвращает что успели), НЕ роняя прогон: архив доберёт в следующий заход."""
     token = os.environ["WB_TOKEN"].strip()
     dfrom = int(time.time()) - days * 86400
     base = "https://feedbacks-api.wildberries.ru/api/v1/feedbacks"
     res = {}
     for ans in ("false", "true"):
         d = {}
-        for t in range(5):
+        for t in range(2):  # максимум 2 попытки (1 повтор) — не долбим WB
             try:
                 u = base + "?" + urllib.parse.urlencode(
                     {"isAnswered": ans, "take": 5000, "skip": 0, "order": "dateDesc", "dateFrom": dfrom})
@@ -30,10 +43,10 @@ def wb_fetch(days=14):
                 with urllib.request.urlopen(req, context=CTX, timeout=60) as r:
                     d = json.loads(r.read().decode()); break
             except urllib.error.HTTPError as e:
-                if e.code == 429 and t < 4:
-                    w = int(e.headers.get("X-Ratelimit-Retry", "60")) + 3
-                    print("WB 429 ->", w, flush=True); time.sleep(w); continue
-                raise
+                if e.code == 429 and t == 0:
+                    w = int(e.headers.get("X-Ratelimit-Retry", "65")) + 5
+                    print(f"WB 429 ({ans}) -> ждём {w}с и ОДИН повтор", flush=True); time.sleep(w); continue
+                print(f"WB {ans}: {e.code} — пропускаю бакет (доберём позже)", flush=True); break
         for f in (d.get("data") or {}).get("feedbacks") or []:
             pd = f.get("productDetails") or {}
             res["wb_" + str(f.get("id"))] = {
@@ -42,18 +55,22 @@ def wb_fetch(days=14):
                 "date": (f.get("createdDate") or "")[:10], "score": f.get("productValuation"),
                 "pros": (f.get("pros") or "").strip(), "cons": (f.get("cons") or "").strip(),
                 "text": (f.get("text") or "").strip()}
-        time.sleep(1.5)
+        time.sleep(20)  # пауза между бакетами — бережём лимит WB
     return list(res.values())
+
+
+def _ws():
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa = json.loads(os.environ["GSHEETS_SA_JSON"])
+    gc = gspread.authorize(Credentials.from_service_account_info(
+        sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
+    return gc.open_by_key(SHEET).worksheet(WB_TAB)
 
 
 def archive_append(rows):
     try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-        sa = json.loads(os.environ["GSHEETS_SA_JSON"])
-        gc = gspread.authorize(Credentials.from_service_account_info(
-            sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
-        ws = gc.open_by_key(SHEET).worksheet(WB_TAB)
+        ws = _ws()
         existing = set(ws.col_values(1))
         new = [r for r in rows if r["id"] not in existing]
         if new:
@@ -63,6 +80,23 @@ def archive_append(rows):
         return len(new)
     except Exception as e:
         print("архив: ошибка", str(e)[:150]); return -1
+
+
+def archive_week(los, his):
+    """Читает ВСЕ отзывы недели [los..his] из архива (с текстом и без). Источник правды для счёта."""
+    ws = _ws()
+    out = []
+    for r in ws.get_all_values()[1:]:
+        r = r + [""] * (8 - len(r)) if len(r) < 8 else r
+        d = (r[3] or "").strip()
+        if los <= d <= his:
+            try:
+                sc = int(r[4])
+            except (ValueError, TypeError):
+                sc = None
+            out.append({"article": (r[2] or "").strip(), "date": d, "score": sc,
+                        "pros": (r[5] or "").strip(), "cons": (r[6] or "").strip(), "text": (r[7] or "").strip()})
+    return out
 
 
 import re
@@ -97,7 +131,6 @@ def cluster_reasons(negs):
                 if rx.search(t):
                     cats[label] += 1
         if cats:
-            # один самый частый ярлык; при равенстве — более специфичный (раньше в _CATS)
             reason = sorted(cats.items(), key=lambda x: (-x[1], order[x[0]]))[0][0]
         else:
             reason = "негативный отзыв"
@@ -106,16 +139,27 @@ def cluster_reasons(negs):
 
 
 def main():
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(MSK).date()
+
+    # 1) СБОР В АРХИВ (ежедневно, мягко). На сбое не падаем — архив доберёт в следующий заход.
+    try:
+        reviews = wb_fetch(14)
+        added = archive_append(reviews)
+        print(f"собрано {len(reviews)}, в архив добавлено {added}", flush=True)
+    except Exception as e:
+        print("сбор не удался (не критично для отчёта):", str(e)[:150], flush=True)
+
+    # 2) ОТЧЁТ — только по понедельникам (или всегда при DRY для теста). Считаем ИЗ АРХИВА.
+    is_monday = today.weekday() == 0
+    if MODE == "archive" or (not is_monday and not DRY):
+        print("режим архива / не понедельник — отчёт не формирую", flush=True)
+        return
+
     mon_this = today - timedelta(days=today.weekday())
     lo, hi = mon_this - timedelta(days=7), mon_this - timedelta(days=1)
     los, his = lo.isoformat(), hi.isoformat()
 
-    reviews = wb_fetch(14)
-    added = archive_append(reviews)
-    print(f"собрано {len(reviews)}, в архив добавлено {added}", flush=True)
-
-    wk = [r for r in reviews if los <= r["date"] <= his]
+    wk = archive_week(los, his)  # ВСЕ отзывы недели из архива: с текстом и без
     st = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
     for r in wk:
         if r["score"] in st:
@@ -133,9 +177,9 @@ def main():
         lines += ["", "⚠️ <b>Самые частые причины негатива:</b>"] + reasons
     lines += ["", "Человек, обрати внимание😏"]
     msg = "\n".join(lines)
-    print("--- СВОДКА ---\n" + msg, flush=True)
-    # дедуп: одна сводка на неделю. Резервные крон-времена (пн 15/17/19) не задвоят,
-    # а если один крон дропнется — поймает следующий. Ключ недели = понедельник запуска.
+    print("--- СВОДКА (из архива) ---\n" + msg, flush=True)
+
+    # дедуп: одна сводка на неделю. Ключ недели = понедельник запуска.
     week_key = mon_this.isoformat()
     state_path = "data/reviews_weekly_state.json"
     try:
