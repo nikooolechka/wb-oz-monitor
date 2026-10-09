@@ -82,27 +82,65 @@ def archive_append(rows):
         print("архив: ошибка", str(e)[:150]); return -1
 
 
-def snapshot_wb_count():
-    """Снимок ОБЩЕГО счётчика оценок WB (/count) в tab rating_snapshots — каждый прогon.
-    Дельта между снимками (пн→пн) = реальное число оценок за неделю, ВКЛЮЧАЯ чистые звёзды
-    (список feedbacks их недобирает). Лёгкий вызов, не 429-опасный."""
+def snapshot_wb_ratings():
+    """Снимок рейтинга WB ПО КАЖДОЙ СКЛЕЙКЕ через публичный виджет feedbacks.wb.ru:
+    feedbackCount (ВСЕГО оценок, вкл. чистые звёзды) + valuationDistribution (по звёздам).
+    Из облака (виджет отдаёт gzip, не гео-локан). Пишет в rating_snapshots. Дельта пн→пн = недельный счёт.
+    ⚠️ НЕ /count — он считает архивные/удалённые (30475 vs реальных 22304 по карточкам). См. грабли в памяти."""
+    import gzip
     try:
         token = os.environ["WB_TOKEN"].strip()
-        req = urllib.request.Request("https://feedbacks-api.wildberries.ru/api/v1/feedbacks/count",
-                                     headers={"Authorization": token})
-        with urllib.request.urlopen(req, context=CTX, timeout=40) as r:
-            total = json.loads(r.read().decode()).get("data")
+        def getj(url, hdr, data=None):
+            r = urllib.request.Request(url, data=(json.dumps(data).encode() if data else None), headers=hdr)
+            raw = urllib.request.urlopen(r, context=CTX, timeout=60).read()
+            if raw[:2] == b"\x1f\x8b":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode("utf-8"))
+        cl = getj("https://content-api.wildberries.ru/content/v2/get/cards/list",
+                  {"Authorization": token, "Content-Type": "application/json"},
+                  {"settings": {"cursor": {"limit": 100}, "filter": {"withPhoto": -1}}}).get("cards") or []
+        byimt = {}
+        for c in cl:
+            byimt.setdefault(c.get("imtID"), []).append(c.get("vendorCode"))
+        UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120 Safari/537.36",
+              "Accept": "*/*", "Referer": "https://www.wildberries.ru/", "Accept-Encoding": "gzip"}
+        today = datetime.now(MSK).date().isoformat()
+        rows = []; tot = 0; dist = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}; txt = 0; n = 0
+        for imt, vcs in byimt.items():
+            if not imt:
+                continue
+            d = None
+            for host in ("feedbacks2.wb.ru", "feedbacks1.wb.ru"):
+                try:
+                    d = getj(f"https://{host}/feedbacks/v2/{imt}", UA)
+                    if d and d.get("feedbackCount") is not None:
+                        break
+                except Exception:
+                    d = None
+            if not d or d.get("feedbackCount") is None:
+                continue
+            fc = d.get("feedbackCount") or 0; vd = d.get("valuationDistribution") or {}
+            nm = ",".join([v for v in vcs if v])[:60]
+            rows.append([today, "WB", "card", str(imt), fc,
+                         int(vd.get("5", 0)), int(vd.get("4", 0)), int(vd.get("3", 0)),
+                         int(vd.get("2", 0)), int(vd.get("1", 0)), nm])
+            tot += fc; txt += d.get("feedbackCountWithText") or 0
+            for s in dist:
+                dist[s] += int(vd.get(str(s), 0) or 0)
+            n += 1; time.sleep(0.4)
+        if not n:
+            print("снимок WB: виджет не отдал ни одной карточки (гео-блок?)", flush=True); return
+        rows.append([today, "WB", "global", "vse kartochki", tot,
+                     dist[5], dist[4], dist[3], dist[2], dist[1], f"itog WB (vsego, s textom {txt})"])
         import gspread
         from google.oauth2.service_account import Credentials
         sa = json.loads(os.environ["GSHEETS_SA_JSON"])
         gc = gspread.authorize(Credentials.from_service_account_info(
             sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
-        ws = gc.open_by_key(SHEET).worksheet("rating_snapshots")
-        ws.append_row([datetime.now(MSK).date().isoformat(), "WB", "global", "все товары",
-                       total, "", "", "", "", "", "авто-снимок счётчика"], value_input_option="RAW")
-        print(f"снимок WB /count = {total}", flush=True)
+        gc.open_by_key(SHEET).worksheet("rating_snapshots").append_rows(rows, value_input_option="RAW")
+        print(f"снимок WB рейтинга: склеек {n}, всего {tot}, с текстом {txt}", flush=True)
     except Exception as e:
-        print("снимок WB /count не удался (не критично):", str(e)[:120], flush=True)
+        print("снимок WB рейтинга не удался (не критично):", str(e)[:150], flush=True)
 
 
 def archive_week(los, his):
@@ -172,8 +210,10 @@ def main():
     except Exception as e:
         print("сбор не удался (не критично для отчёта):", str(e)[:150], flush=True)
 
-    # 1b) СНИМОК общего счётчика оценок WB (для недельной дельты, включая чистые звёзды)
-    snapshot_wb_count()
+    # 1b) СНИМОК рейтинга WB по карточкам (для недельной дельты пн→пн, включая чистые звёзды).
+    #     Раз в неделю (понедельник), чтобы не плодить строки. SNAP=1 — форс (тест/базовый замер).
+    if today.weekday() == 0 or os.environ.get("SNAP") == "1":
+        snapshot_wb_ratings()
 
     # 2) ОТЧЁТ — только по понедельникам (или всегда при DRY для теста). Считаем ИЗ АРХИВА.
     is_monday = today.weekday() == 0

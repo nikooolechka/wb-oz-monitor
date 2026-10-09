@@ -18,6 +18,10 @@ on:
         description: "report (дефолт) | archive (только сбор)"
         type: string
         default: "report"
+      snap:
+        description: "SNAP — форсировать снимок рейтинга WB (иначе только по понедельникам)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -44,6 +48,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY: ${{ inputs.dry && '1' || '' }}
           MODE: ${{ inputs.mode || 'report' }}
+          SNAP: ${{ inputs.snap && '1' || '' }}
         run: python wb_reviews_weekly.py
       - name: Сохранить состояние (какая неделя уже отправлена)
         run: |
