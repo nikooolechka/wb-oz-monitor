@@ -63,8 +63,9 @@ def main():
     # отдельный старый Ozon-отчёт НЕ шлём (иначе дубль по Озону). На первый понедельник дельты нет → шлём.
     try:
         from wb_reviews_weekly import build_delta_report
-        if build_delta_report(mon_this):
-            print("корректный дельта-отчёт шлёт объединённый WB-скрипт — Ozon отдельно не шлю")
+        st, _ = build_delta_report(mon_this)
+        if st in ("DELTA", "WAIT"):
+            print("корректный дельта-отчёт шлёт/ждёт объединённый WB-скрипт — Ozon отдельно не шлю")
             return
     except Exception as e:
         print("проверка дельты не удалась (шлю старый Ozon-отчёт):", str(e)[:100])
