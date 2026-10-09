@@ -199,6 +199,100 @@ def cluster_reasons(negs):
     return out[:5]
 
 
+def _snap_globals():
+    """global-снимки рейтинга из rating_snapshots: {'WB':[{date,total,dist}...], 'OZON':[...]}, по дате."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa = json.loads(os.environ["GSHEETS_SA_JSON"])
+    gc = gspread.authorize(Credentials.from_service_account_info(
+        sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
+    ws = gc.open_by_key(SHEET).worksheet("rating_snapshots")
+    out = {"WB": [], "OZON": []}
+    for r in ws.get_all_values()[1:]:
+        if len(r) >= 10 and r[2] == "global" and r[1] in out:
+            try:
+                out[r[1]].append({"date": r[0], "total": int(r[4] or 0),
+                                  "dist": {5: int(r[5] or 0), 4: int(r[6] or 0), 3: int(r[7] or 0),
+                                           2: int(r[8] or 0), 1: int(r[9] or 0)}})
+            except (ValueError, TypeError):
+                pass
+    for p in out:
+        out[p].sort(key=lambda x: x["date"])
+    return out
+
+
+def _pick_before(snaps, on_or_before):
+    best = None
+    for s in snaps:
+        if s["date"] <= on_or_before:
+            best = s
+    return best
+
+
+def build_delta_report(mon_this):
+    """Корректный недельный отчёт = ДЕЛЬТА рейтинг-снимков пн→пн (всего + звёзды), включая чистые
+    звёзды. Одно сообщение WB+Ozon. Возвращает (msg, week_key) или None, если дельту не собрать
+    (нет снимка прошлой недели — напр. в первый понедельник) → caller шлёт старый отчёт."""
+    g = _snap_globals()
+    cur_cut = mon_this.isoformat()
+    prev_cut = (mon_this - timedelta(days=3)).isoformat()   # снимок прошлой недели — до середины прошлой
+    title = {"WB": "🟣 <b>Wildberries</b>", "OZON": "🔵 <b>Ozon</b>"}
+    label = {"WB": "wb", "OZON": "oz"}
+    blocks = []; period_lo = None
+    for p in ("WB", "OZON"):
+        cur = _pick_before(g[p], cur_cut)
+        prev = _pick_before([s for s in g[p] if s["date"] < prev_cut], prev_cut)
+        if not cur or not prev or cur["date"] == prev["date"]:
+            return None
+        dt = cur["total"] - prev["total"]
+        dd = {s: cur["dist"][s] - prev["dist"][s] for s in (5, 4, 3, 2, 1)}
+        if period_lo is None or prev["date"] > period_lo:
+            period_lo = prev["date"]
+        # причины негатива — из текстового архива за период
+        lo_d = prev["date"]; hi_d = cur["date"]
+        if p == "WB":
+            negs = [r for r in archive_week(lo_d, hi_d) if (r["score"] or 5) <= 3]
+        else:
+            negs = [r for r in _oz_archive_week(lo_d, hi_d) if (r["score"] or 5) <= 3]
+        reasons = cluster_reasons(negs)
+        b = [title[p], f"Новых отзывов: <b>{max(dt,0)}</b>",
+             f"⭐️5 — <b>{max(dd[5],0)}</b>   ⭐️4 — <b>{max(dd[4],0)}</b>   ⭐️3 — <b>{max(dd[3],0)}</b>   "
+             f"⭐️2 — <b>{max(dd[2],0)}</b>   ⭐️1 — <b>{max(dd[1],0)}</b>"]
+        if reasons:
+            b += ["<b>Частые причины негатива:</b>"] + reasons
+        blocks.append("\n".join(b))
+    from datetime import date as _date
+    lo = _date.fromisoformat(period_lo); hi = mon_this - timedelta(days=1)
+    head = ["📊 <b>Отзывы за неделю</b>", f"{lo.strftime('%d.%m')} – {hi.strftime('%d.%m')}", ""]
+    msg = "\n".join(head) + "\n\n".join(blocks) + "\n\nЧеловек, обрати внимание😏"
+    return msg, mon_this.isoformat()
+
+
+def _oz_archive_week(los, his):
+    """Текстовые отзывы Ozon за неделю из архива reviews_ozon (для блока причин негатива)."""
+    try:
+        import gspread
+        from google.oauth2.service_account import Credentials
+        sa = json.loads(os.environ["GSHEETS_SA_JSON"])
+        gc = gspread.authorize(Credentials.from_service_account_info(
+            sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
+        ws = gc.open_by_key(SHEET).worksheet("reviews_ozon")
+        out = []
+        for r in ws.get_all_values()[1:]:
+            r = r + [""] * (8 - len(r)) if len(r) < 8 else r
+            d = (r[3] or "").strip()
+            if los <= d <= his:
+                try:
+                    sc = int(r[4])
+                except (ValueError, TypeError):
+                    sc = None
+                out.append({"article": (r[2] or "").strip(), "score": sc,
+                            "pros": (r[5] or "").strip(), "cons": (r[6] or "").strip(), "text": (r[7] or "").strip()})
+        return out
+    except Exception:
+        return []
+
+
 def main():
     today = datetime.now(MSK).date()
 
@@ -222,30 +316,6 @@ def main():
         return
 
     mon_this = today - timedelta(days=today.weekday())
-    lo, hi = mon_this - timedelta(days=7), mon_this - timedelta(days=1)
-    los, his = lo.isoformat(), hi.isoformat()
-
-    wk = archive_week(los, his)  # ВСЕ отзывы недели из архива: с текстом и без
-    st = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
-    for r in wk:
-        if r["score"] in st:
-            st[r["score"]] += 1
-    reasons = cluster_reasons([r for r in wk if (r["score"] or 5) <= 3])
-
-    lines = ["📊 <b>Отзывы WB за неделю</b>",
-             f"{lo.strftime('%d.%m')} – {hi.strftime('%d.%m')} было <b>{len(wk)} отзывов!</b>", "",
-             f"⭐️ 5 звёзд — <b>{st[5]}</b>",
-             f"⭐️ 4 звезды — <b>{st[4]}</b>",
-             f"⭐️ 3 звезды — <b>{st[3]}</b>",
-             f"⭐️ 2 звезды — <b>{st[2]}</b>",
-             f"⭐️ 1 звезда — <b>{st[1]}</b>"]
-    if reasons:
-        lines += ["", "⚠️ <b>Самые частые причины негатива:</b>"] + reasons
-    lines += ["", "Человек, обрати внимание😏"]
-    msg = "\n".join(lines)
-    print("--- СВОДКА (из архива) ---\n" + msg, flush=True)
-
-    # дедуп: одна сводка на неделю. Ключ недели = понедельник запуска.
     week_key = mon_this.isoformat()
     state_path = "data/reviews_weekly_state.json"
     try:
@@ -253,15 +323,44 @@ def main():
             already = json.load(f).get("last_sent_week") == week_key
     except (FileNotFoundError, json.JSONDecodeError):
         already = False
-    if DRY:
-        print("DRY=1 — в канал НЕ отправлено")
-    elif already:
-        print(f"сводка за неделю {week_key} уже отправлена — пропуск (дубля не будет)")
-    else:
+
+    def _send_and_save(msg):
+        if DRY:
+            print("DRY=1 — в канал НЕ отправлено"); return
+        if already:
+            print(f"сводка за неделю {week_key} уже отправлена — пропуск"); return
         notify.send(msg); print("отправлено в канал")
         os.makedirs("data", exist_ok=True)
         with open(state_path, "w", encoding="utf-8") as f:
             json.dump({"last_sent_week": week_key}, f)
+
+    # ПРЕДПОЧТИТЕЛЬНО: корректный ДЕЛЬТА-отчёт (всего+звёзды, WB+Ozon одним сообщением, вкл. чистые звёзды)
+    delta = build_delta_report(mon_this)
+    if delta:
+        msg, _ = delta
+        print("--- ДЕЛЬТА-ОТЧЁТ (корректный) ---\n" + msg, flush=True)
+        _send_and_save(msg)
+        return
+
+    # ЗАПАС (первый понедельник — нет снимка прошлой недели): старый отчёт из архива (только WB, недосчёт)
+    lo, hi = mon_this - timedelta(days=7), mon_this - timedelta(days=1)
+    wk = archive_week(lo.isoformat(), hi.isoformat())
+    st = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
+    for r in wk:
+        if r["score"] in st:
+            st[r["score"]] += 1
+    reasons = cluster_reasons([r for r in wk if (r["score"] or 5) <= 3])
+    lines = ["📊 <b>Отзывы WB за неделю</b>",
+             f"{lo.strftime('%d.%m')} – {hi.strftime('%d.%m')} было <b>{len(wk)} отзывов!</b>", "",
+             f"⭐️ 5 звёзд — <b>{st[5]}</b>", f"⭐️ 4 звезды — <b>{st[4]}</b>",
+             f"⭐️ 3 звезды — <b>{st[3]}</b>", f"⭐️ 2 звезды — <b>{st[2]}</b>",
+             f"⭐️ 1 звезда — <b>{st[1]}</b>"]
+    if reasons:
+        lines += ["", "⚠️ <b>Самые частые причины негатива:</b>"] + reasons
+    lines += ["", "Человек, обрати внимание😏"]
+    msg = "\n".join(lines)
+    print("--- СВОДКА (запасной старый формат, из архива) ---\n" + msg, flush=True)
+    _send_and_save(msg)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,16 @@ def main():
     msg = "\n".join(lines)
     print("--- СВОДКА OZON ---\n" + msg, flush=True)
 
+    # Если доступен объединённый ДЕЛЬТА-отчёт (его шлёт wb_reviews_weekly, WB+Ozon одним сообщением) —
+    # отдельный старый Ozon-отчёт НЕ шлём (иначе дубль по Озону). На первый понедельник дельты нет → шлём.
+    try:
+        from wb_reviews_weekly import build_delta_report
+        if build_delta_report(mon_this):
+            print("корректный дельта-отчёт шлёт объединённый WB-скрипт — Ozon отдельно не шлю")
+            return
+    except Exception as e:
+        print("проверка дельты не удалась (шлю старый Ozon-отчёт):", str(e)[:100])
+
     week_key = mon_this.isoformat()
     state_path = "data/oz_reviews_weekly_state.json"
     try:
