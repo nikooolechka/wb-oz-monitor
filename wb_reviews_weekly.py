@@ -230,30 +230,38 @@ def _pick_before(snaps, on_or_before):
 
 
 def build_delta_report(mon_this):
-    """Корректный недельный отчёт = ДЕЛЬТА рейтинг-снимков пн→пн (всего + звёзды), включая чистые
-    звёзды. Одно сообщение WB+Ozon. Возвращает (msg, week_key) или None, если дельту не собрать
-    (нет снимка прошлой недели — напр. в первый понедельник) → caller шлёт старый отчёт."""
+    """Корректный недельный отчёт = ДЕЛЬТА рейтинг-снимков пн→пн (всего + звёзды, включая чистые
+    звёзды). Одно сообщение WB+Ozon. Возвращает статус:
+      ("DELTA", msg) — дельта собрана, слать;
+      ("WAIT", None) — снимок ПРОШЛОЙ недели есть у обеих площадок, но ЭТОЙ недели ещё нет
+                        (напр. Ozon-снимок 09/12:00 ещё не отработал) → НЕ слать, НЕ дедупить, ждать след. прогон;
+      ("OLD",  None) — снимка прошлой недели нет (первый понедельник) → caller шлёт старый отчёт."""
     g = _snap_globals()
-    cur_cut = mon_this.isoformat()
-    prev_cut = (mon_this - timedelta(days=3)).isoformat()   # снимок прошлой недели — до середины прошлой
+    prev_lo = (mon_this - timedelta(days=9)).isoformat()   # окно снимка ПРОШЛОЙ недели ~ прошлый пн
+    prev_hi = (mon_this - timedelta(days=5)).isoformat()
+    cur_min = (mon_this - timedelta(days=1)).isoformat()   # снимок ЭТОЙ недели (дата >= почти пн)
     title = {"WB": "🟣 <b>Wildberries</b>", "OZON": "🔵 <b>Ozon</b>"}
-    label = {"WB": "wb", "OZON": "oz"}
+    prevs = {}; curs = {}
+    for p in ("WB", "OZON"):
+        pv = [s for s in g[p] if prev_lo <= s["date"] <= prev_hi]
+        prevs[p] = pv[-1] if pv else None
+        cv = [s for s in g[p] if s["date"] >= cur_min]
+        curs[p] = cv[-1] if cv else None
+    prev_ok = all(prevs[p] for p in ("WB", "OZON"))
+    cur_ok = all(curs[p] for p in ("WB", "OZON"))
+    if not prev_ok:
+        return ("OLD", None)
+    if not cur_ok:
+        return ("WAIT", None)
     blocks = []; period_lo = None
     for p in ("WB", "OZON"):
-        cur = _pick_before(g[p], cur_cut)
-        prev = _pick_before([s for s in g[p] if s["date"] < prev_cut], prev_cut)
-        if not cur or not prev or cur["date"] == prev["date"]:
-            return None
+        cur = curs[p]; prev = prevs[p]
         dt = cur["total"] - prev["total"]
         dd = {s: cur["dist"][s] - prev["dist"][s] for s in (5, 4, 3, 2, 1)}
         if period_lo is None or prev["date"] > period_lo:
             period_lo = prev["date"]
-        # причины негатива — из текстового архива за период
-        lo_d = prev["date"]; hi_d = cur["date"]
-        if p == "WB":
-            negs = [r for r in archive_week(lo_d, hi_d) if (r["score"] or 5) <= 3]
-        else:
-            negs = [r for r in _oz_archive_week(lo_d, hi_d) if (r["score"] or 5) <= 3]
+        negs_src = archive_week if p == "WB" else _oz_archive_week
+        negs = [r for r in negs_src(prev["date"], cur["date"]) if (r["score"] or 5) <= 3]
         reasons = cluster_reasons(negs)
         b = [title[p], f"Новых отзывов: <b>{max(dt,0)}</b>",
              f"⭐️5 — <b>{max(dd[5],0)}</b>   ⭐️4 — <b>{max(dd[4],0)}</b>   ⭐️3 — <b>{max(dd[3],0)}</b>   "
@@ -265,7 +273,7 @@ def build_delta_report(mon_this):
     lo = _date.fromisoformat(period_lo); hi = mon_this - timedelta(days=1)
     head = ["📊 <b>Отзывы за неделю</b>", f"{lo.strftime('%d.%m')} – {hi.strftime('%d.%m')}", ""]
     msg = "\n".join(head) + "\n\n".join(blocks) + "\n\nЧеловек, обрати внимание😏"
-    return msg, mon_this.isoformat()
+    return ("DELTA", msg)
 
 
 def _oz_archive_week(los, his):
@@ -335,11 +343,13 @@ def main():
             json.dump({"last_sent_week": week_key}, f)
 
     # ПРЕДПОЧТИТЕЛЬНО: корректный ДЕЛЬТА-отчёт (всего+звёзды, WB+Ozon одним сообщением, вкл. чистые звёзды)
-    delta = build_delta_report(mon_this)
-    if delta:
-        msg, _ = delta
-        print("--- ДЕЛЬТА-ОТЧЁТ (корректный) ---\n" + msg, flush=True)
-        _send_and_save(msg)
+    status, payload = build_delta_report(mon_this)
+    if status == "DELTA":
+        print("--- ДЕЛЬТА-ОТЧЁТ (корректный) ---\n" + payload, flush=True)
+        _send_and_save(payload)
+        return
+    if status == "WAIT":
+        print("снимок ЭТОЙ недели ещё не готов (жду Ozon/WB-снимок) — НЕ шлю и НЕ дедуплю, поймает след. прогон", flush=True)
         return
 
     # ЗАПАС (первый понедельник — нет снимка прошлой недели): старый отчёт из архива (только WB, недосчёт)
