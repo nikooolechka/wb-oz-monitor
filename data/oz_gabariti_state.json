@@ -127,13 +127,13 @@
     },
     "irrigator_new_05": {
       "status": "ok",
-      "oz_dims": "24,5×7×6,5",
-      "oz_vol": 1.115
+      "oz_dims": "8×19×8",
+      "oz_vol": 1.216
     },
     "irrigator_new_1": {
-      "status": "low",
-      "oz_dims": "26×8,5×8,5",
-      "oz_vol": 1.879
+      "status": "ok",
+      "oz_dims": "10×22×10",
+      "oz_vol": 2.2
     }
   }
 }
