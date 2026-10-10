@@ -9,6 +9,7 @@ CTX=ssl._create_unverified_context()
 SID="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; TAB="остатки"; GID=1290662357
 MAIL_USER="nikol-oleinik@mail.ru"; SENDER="as-farm-as-farm@yandex.ru"
 DRY=os.environ.get("DRY")=="1"
+DEMAND=os.environ.get("DEMAND_DATA","").strip()
 def dec(s):
     if not s: return ""
     return "".join(t.decode(e or "utf-8","replace") if isinstance(t,bytes) else t for t,e in decode_header(s))
@@ -46,41 +47,54 @@ def article(name):
         return {"100":"Dental_100","40":"Dental_40","20":"Dental20"}.get(size,"")
     return ""
 
-# 1. письмо
-PASS=os.environ["MAILRU_APP_PASS"]
-M=imaplib.IMAP4_SSL("imap.mail.ru",ssl_context=CTX); M.login(MAIL_USER,PASS); M.select("INBOX")
-typ,dj=M.search(None,f'(FROM "{SENDER}")'); ost_uids=[]; latest=None
-for i in dj[0].split():
-    typ,d=M.fetch(i,"(RFC822)"); msg=email.message_from_bytes(d[0][1]); subj=dec(msg.get("Subject"))
-    if "Остатки товаров" in subj: ost_uids.append(i); latest=(i,msg,subj)
-if not latest: print("нет письма остатков"); M.logout(); raise SystemExit(0)
-i,msg,subj=latest
-m=re.search(r"от\s+(\d{2})\.(\d{2})\.(\d{4})",subj); datestr=f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else datetime.date.today().strftime("%d.%m.%Y")
-from email.utils import parsedate_to_datetime
-try:
-    _dt=parsedate_to_datetime(msg.get("Date")).astimezone(datetime.timezone(datetime.timedelta(hours=3))); timestr=_dt.strftime("%H:%M")
-except Exception: timestr=""
-title=(f"Остатки на складе — на {datestr} {timestr}").strip()
-htmltext=None
-for p in msg.walk():
-    fn=p.get_filename()
-    if fn and dec(fn).lower().endswith(".zip"):
-        z=zipfile.ZipFile(io.BytesIO(p.get_payload(decode=True)))
-        for nm in z.namelist():
-            if nm.lower().endswith(".html"): htmltext=z.read(nm).decode("utf-8-sig")
-if not htmltext: print("нет HTML"); M.logout(); raise SystemExit(1)
+# 1. ИСТОЧНИК: on-demand данные съёма из 1С (DEMAND_DATA) ИЛИ письмо (дневной режим)
+if DEMAND:
+    _dd=json.loads(DEMAND)
+    items={}
+    for _nm,_sv in _dd.get('items',[]):
+        items[norm(_nm)]=(_nm,int(_sv))
+    total=_dd.get('total')
+    datestr=_dd.get('datestr') or datetime.date.today().strftime('%d.%m.%Y')
+    timestr=_dd.get('timestr') or ''
+    title=(f'Остатки на складе — на {datestr} {timestr}').strip()
+    M=None; ost_uids=[]
+    print(f'[DEMAND] товаров {len(items)} итог {total}')
+else:
+    # 1. письмо
+    PASS=os.environ["MAILRU_APP_PASS"]
+    M=imaplib.IMAP4_SSL("imap.mail.ru",ssl_context=CTX); M.login(MAIL_USER,PASS); M.select("INBOX")
+    typ,dj=M.search(None,f'(FROM "{SENDER}")'); ost_uids=[]; latest=None
+    for i in dj[0].split():
+        typ,d=M.fetch(i,"(RFC822)"); msg=email.message_from_bytes(d[0][1]); subj=dec(msg.get("Subject"))
+        if "Остатки товаров" in subj: ost_uids.append(i); latest=(i,msg,subj)
+    if not latest: print("нет письма остатков"); (M and M.logout()); raise SystemExit(0)
+    i,msg,subj=latest
+    m=re.search(r"от\s+(\d{2})\.(\d{2})\.(\d{4})",subj); datestr=f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else datetime.date.today().strftime("%d.%m.%Y")
+    from email.utils import parsedate_to_datetime
+    try:
+        _dt=parsedate_to_datetime(msg.get("Date")).astimezone(datetime.timezone(datetime.timedelta(hours=3))); timestr=_dt.strftime("%H:%M")
+    except Exception: timestr=""
+    title=(f"Остатки на складе — на {datestr} {timestr}").strip()
+    htmltext=None
+    for p in msg.walk():
+        fn=p.get_filename()
+        if fn and dec(fn).lower().endswith(".zip"):
+            z=zipfile.ZipFile(io.BytesIO(p.get_payload(decode=True)))
+            for nm in z.namelist():
+                if nm.lower().endswith(".html"): htmltext=z.read(nm).decode("utf-8-sig")
+    if not htmltext: print("нет HTML"); (M and M.logout()); raise SystemExit(1)
 
-# 2. парс + сверка
-def cells(tr): return [re.sub(r"\s+"," ",html.unescape(re.sub(r"<[^>]+>"," ",c))).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",tr,re.S|re.I)]
-items={}; total=None
-for tr in re.findall(r"<tr[^>]*>(.*?)</tr>",htmltext,re.S|re.I):
-    c=cells(tr)
-    if len(c)==9 and c[0].startswith("Шпиндовск"): total=n1c(c[6]); continue  # С склада гот.прод. (правый блок), НЕ Итого
-    if len(c)!=10 or not c[0] or c[0]=="Номенклатура, Артикул": continue
-    items[norm(c[0])]=(c[0],n1c(c[7]))  # ТОЛЬКО Свободно «Склад готовой продукции ИП Шпиндовский» (правый блок idx7), НЕ Итого idx4
-svsum=sum(v[1] for v in items.values())
-print(f"товаров: {len(items)} | сумма Свободно: {svsum} | итог 1С: {total}")
-if total is not None and svsum!=total: print("СВЕРКА НЕ СОШЛАСЬ — не пишу"); M.logout(); raise SystemExit(1)
+    # 2. парс + сверка
+    def cells(tr): return [re.sub(r"\s+"," ",html.unescape(re.sub(r"<[^>]+>"," ",c))).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",tr,re.S|re.I)]
+    items={}; total=None
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>",htmltext,re.S|re.I):
+        c=cells(tr)
+        if len(c)==9 and c[0].startswith("Шпиндовск"): total=n1c(c[6]); continue  # С склада гот.прод. (правый блок), НЕ Итого
+        if len(c)!=10 or not c[0] or c[0]=="Номенклатура, Артикул": continue
+        items[norm(c[0])]=(c[0],n1c(c[7]))  # ТОЛЬКО Свободно «Склад готовой продукции ИП Шпиндовский» (правый блок idx7), НЕ Итого idx4
+    svsum=sum(v[1] for v in items.values())
+    print(f"товаров: {len(items)} | сумма Свободно: {svsum} | итог 1С: {total}")
+    if total is not None and svsum!=total: print("СВЕРКА НЕ СОШЛАСЬ — не пишу"); (M and M.logout()); raise SystemExit(1)
 # индекс письма по артикулу
 by_art={}
 for k,(raw,sv) in items.items(): by_art.setdefault(article(raw),[]).append(k)
@@ -170,7 +184,7 @@ else:
                 if _sv!=_exp: _bad.append((_at,_pak(_nm),_sv,_exp))
         if (total is not None and _bsum!=total) or _bad:
             print(f"САМОПРОВЕРКА НЕ ПРОШЛА — скрин НЕ шлю, письмо НЕ удаляю. сумма={_bsum} итог={total} несоответствий={len(_bad)} {_bad[:6]}")
-            M.logout(); raise SystemExit(1)
+            (M and M.logout()); raise SystemExit(1)
         print(f"самопроверка ОК: сумма {_bsum} == итог {total}, построчно сошлось ({len(used)} позиций)")
     except SystemExit: raise
     except Exception as _e:
@@ -326,7 +340,7 @@ if png:
 
 # 6. удалить письмо остатков (только после успеха)
 if DRY: print("[DRY] письмо не удаляю")
-elif sent and os.environ.get("NODELETE")!="1":
+elif sent and not DEMAND and os.environ.get("NODELETE")!="1":
     # НЕ уничтожаем письмо: ПЕРЕМЕЩАЕМ в Корзину (аудит — всегда можно поднять первоисточник 1С).
     # Если перенос не удался — письмо ОСТАВЛЯЕМ в INBOX (не expunge), чтобы не потерять.
     TRASH="&BBoEPgRABDcEOAQ9BDA-"  # Корзина (IMAP modified UTF-7)
@@ -339,4 +353,4 @@ elif sent and os.environ.get("NODELETE")!="1":
     M.expunge(); print(f"писем остатков перенесено в Корзину: {moved}/{len(ost_uids)}")
 elif os.environ.get("NODELETE")=="1": print("NODELETE=1 — письмо сохранено")
 else: print("отправка не прошла — письмо НЕ удаляю")
-M.logout(); print("GOTOVO")
+(M and M.logout()); print("GOTOVO")
