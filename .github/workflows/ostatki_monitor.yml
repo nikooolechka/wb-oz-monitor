@@ -7,6 +7,10 @@ on:
         description: "NODELETE=1 — не удалять письмо (для теста)"
         required: false
         default: ""
+      demand_data:
+        description: "JSON съёма 1С для on-demand (если задан — берём его вместо письма)"
+        required: false
+        default: ""
 
 concurrency:
   group: ostatki
@@ -28,4 +32,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           OSTATKI_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NODELETE: ${{ github.event.inputs.nodelete }}
+          DEMAND_DATA: ${{ github.event.inputs.demand_data }}
         run: python ostatki_monitor.py
