@@ -1,30 +1,30 @@
 {
   "мск|dental20": {
-    "last": 23,
-    "phase": "alerted_low"
+    "last": 0,
+    "phase": "alerted_zero"
   },
   "мск|dental20zemlyanika": {
-    "last": 481,
+    "last": 446,
     "phase": "armed"
   },
   "мск|dental50": {
-    "last": 231,
+    "last": 198,
     "phase": "armed"
   },
   "мск|dental100zemlyanika": {
-    "last": 268,
+    "last": 249,
     "phase": "armed"
   },
   "мск|dental100banan": {
-    "last": 33,
-    "phase": "alerted_low"
+    "last": 122,
+    "phase": "armed"
   },
   "мск|criol25new": {
     "last": 21,
     "phase": "armed"
   },
   "мск|criol50": {
-    "last": 0,
+    "last": 19,
     "phase": "alerted_zero"
   },
   "мск|cryolipolysis25": {
@@ -32,47 +32,47 @@
     "phase": "alerted_low"
   },
   "мск|cryolipolysis50": {
-    "last": 5,
-    "phase": "alerted_low"
+    "last": 10,
+    "phase": "armed"
   },
   "мск|criogel1l": {
     "last": 19,
     "phase": "armed"
   },
   "мск|spraydlyapolostyrta": {
-    "last": 248,
+    "last": 243,
     "phase": "armed"
   },
   "мск|oralcherry": {
+    "last": 210,
+    "phase": "armed"
+  },
+  "мск|dental40natural": {
     "last": 0,
     "phase": "alerted_zero"
   },
-  "мск|dental40natural": {
-    "last": 48,
-    "phase": "alerted_low"
-  },
   "мск|dental40": {
-    "last": 400,
+    "last": 464,
     "phase": "armed"
   },
   "мск|dental40zemlyanika": {
-    "last": 347,
+    "last": 320,
     "phase": "armed"
   },
   "мск|extractpihta": {
-    "last": 61,
+    "last": 55,
     "phase": "armed"
   },
   "мск|extractromashka": {
-    "last": 67,
+    "last": 61,
     "phase": "armed"
   },
   "мск|makeup50": {
-    "last": 101,
+    "last": 99,
     "phase": "armed"
   },
   "мск|dental100": {
-    "last": 0,
+    "last": 533,
     "phase": "alerted_zero"
   },
   "екб|dental20": {
@@ -80,15 +80,15 @@
     "phase": "alerted_low"
   },
   "екб|dental20zemlyanika": {
-    "last": 114,
+    "last": 108,
     "phase": "armed"
   },
   "екб|dental50": {
-    "last": 22,
-    "phase": "armed"
+    "last": 8,
+    "phase": "alerted_low"
   },
   "екб|dental100banan": {
-    "last": 22,
+    "last": 17,
     "phase": "alerted_low"
   },
   "екб|criol25new": {
@@ -112,27 +112,27 @@
     "phase": "alerted_low"
   },
   "екб|spraydlyapolostyrta": {
-    "last": 61,
+    "last": 56,
     "phase": "armed"
   },
   "екб|dental40natural": {
-    "last": 204,
+    "last": 195,
     "phase": "armed"
   },
   "екб|dental40": {
-    "last": 205,
+    "last": 193,
     "phase": "armed"
   },
   "екб|dental40zemlyanika": {
-    "last": 165,
+    "last": 158,
     "phase": "armed"
   },
   "екб|extractpihta": {
-    "last": 14,
+    "last": 13,
     "phase": "alerted_low"
   },
   "екб|extractromashka": {
-    "last": 46,
+    "last": 42,
     "phase": "alerted_low"
   },
   "екб|makeup50": {
@@ -144,19 +144,19 @@
     "phase": "alerted_zero"
   },
   "казань|dental20zemlyanika": {
-    "last": 151,
+    "last": 145,
     "phase": "armed"
   },
   "казань|dental50": {
-    "last": 128,
+    "last": 126,
     "phase": "armed"
   },
   "казань|dental100zemlyanika": {
-    "last": 87,
+    "last": 83,
     "phase": "armed"
   },
   "казань|dental100banan": {
-    "last": 86,
+    "last": 82,
     "phase": "armed"
   },
   "казань|criol25new": {
@@ -164,7 +164,7 @@
     "phase": "armed"
   },
   "казань|criol50": {
-    "last": 3,
+    "last": 2,
     "phase": "alerted_low"
   },
   "казань|cryolipolysis25": {
@@ -188,31 +188,31 @@
     "phase": "alerted_zero"
   },
   "казань|dental40natural": {
-    "last": 98,
+    "last": 94,
     "phase": "armed"
   },
   "казань|dental40": {
-    "last": 266,
+    "last": 257,
     "phase": "armed"
   },
   "казань|dental40zemlyanika": {
-    "last": 59,
+    "last": 54,
     "phase": "armed"
   },
   "казань|extractpihta": {
-    "last": 24,
+    "last": 23,
     "phase": "alerted_low"
   },
   "казань|extractromashka": {
-    "last": 29,
+    "last": 28,
     "phase": "alerted_low"
   },
   "казань|makeup50": {
-    "last": 60,
+    "last": 59,
     "phase": "armed"
   },
   "казань|dental100": {
-    "last": 230,
-    "phase": "armed"
+    "last": 171,
+    "phase": "alerted_low"
   }
 }
