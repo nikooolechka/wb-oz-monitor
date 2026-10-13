@@ -44,7 +44,7 @@
     "phase": "armed"
   },
   "мск|oralcherry": {
-    "last": 204,
+    "last": 201,
     "phase": "armed"
   },
   "мск|dental40natural": {
@@ -60,7 +60,7 @@
     "phase": "armed"
   },
   "мск|extractpihta": {
-    "last": 53,
+    "last": 52,
     "phase": "alerted_low"
   },
   "мск|extractromashka": {
@@ -68,11 +68,11 @@
     "phase": "armed"
   },
   "мск|makeup50": {
-    "last": 99,
+    "last": 98,
     "phase": "armed"
   },
   "мск|dental100": {
-    "last": 513,
+    "last": 511,
     "phase": "alerted_zero"
   },
   "екб|dental20": {
@@ -116,7 +116,7 @@
     "phase": "armed"
   },
   "екб|dental40natural": {
-    "last": 191,
+    "last": 192,
     "phase": "armed"
   },
   "екб|dental40": {
