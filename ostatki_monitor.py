@@ -17,7 +17,7 @@ def norm(s):
     s=(s or "").lower().replace("шк"," "); s=re.sub(r"\d{6,}"," ",s)
     s=re.sub(r"[^0-9a-zа-яё]+"," ",s); return re.sub(r"\s+"," ",s).strip()
 def n1c(s):
-    s=(s or "").strip().split(",")[0]; s=re.sub(r"[^\d]","",s); return int(s) if s else 0
+    s=str(s if s is not None else "").strip().split(",")[0]; s=re.sub(r"[^\d]","",s); return int(s) if s else 0
 def article(name):
     n=name.lower()
     if "экстракт" in n and "купан" in n:
