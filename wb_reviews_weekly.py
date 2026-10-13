@@ -24,6 +24,38 @@ CTX = ssl._create_unverified_context()
 DRY = os.environ.get("DRY") == "1"
 MODE = (os.environ.get("MODE") or "report").strip().lower()
 MSK = timezone(timedelta(hours=3))
+STATE_TAB = "reviews_weekly_state"
+
+
+def _state_ws():
+    """Вкладка-маркер дедупа (reviews_weekly_state!A1). Создаём, если нет."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+    sa = json.loads(os.environ["GSHEETS_SA_JSON"])
+    gc = gspread.authorize(Credentials.from_service_account_info(
+        sa, scopes=["https://www.googleapis.com/auth/spreadsheets"]))
+    sh = gc.open_by_key(SHEET)
+    try:
+        return sh.worksheet(STATE_TAB)
+    except Exception:
+        return sh.add_worksheet(title=STATE_TAB, rows=5, cols=2)
+
+
+def dedup_get():
+    """Какая неделя уже отправлена — из ЯЧЕЙКИ Sheets (атомарно, без git push)."""
+    try:
+        return (_state_ws().acell("A1").value or "").strip() or None
+    except Exception as e:
+        print("дедуп: чтение из Sheets не удалось:", str(e)[:120], flush=True)
+        return None
+
+
+def dedup_set(week_key):
+    try:
+        _state_ws().update_acell("A1", week_key); return True
+    except Exception as e:
+        print("дедуп: запись в Sheets не удалась:", str(e)[:120], flush=True)
+        return False
 
 
 def wb_fetch(days=14):
@@ -326,11 +358,17 @@ def main():
     mon_this = today - timedelta(days=today.weekday())
     week_key = mon_this.isoformat()
     state_path = "data/reviews_weekly_state.json"
-    try:
-        with open(state_path, encoding="utf-8") as f:
-            already = json.load(f).get("last_sent_week") == week_key
-    except (FileNotFoundError, json.JSONDecodeError):
-        already = False
+    # ДЕДУП устойчив к гонкам git: маркер недели в ЯЧЕЙКЕ Sheets (reviews_weekly_state!A1),
+    # атомарно, без commit/push. Файл в репо оставлен ДУБЛЁРОМ: читаем ОБА, шлём только если
+    # НИ один не отметил эту неделю. Раньше дедуп зависел ТОЛЬКО от git push — один сорванный
+    # push («нечего пушить» 13:38 12.10) → следующий прогон слал сводку повторно.
+    def _file_week():
+        try:
+            with open(state_path, encoding="utf-8") as f:
+                return json.load(f).get("last_sent_week")
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+    already = (dedup_get() == week_key) or (_file_week() == week_key)
 
     def _send_and_save(msg):
         if DRY:
@@ -338,9 +376,10 @@ def main():
         if already:
             print(f"сводка за неделю {week_key} уже отправлена — пропуск"); return
         notify.send(msg); print("отправлено в канал")
+        dedup_set(week_key)  # основной маркер — в Sheets (атомарно, push не нужен)
         os.makedirs("data", exist_ok=True)
         with open(state_path, "w", encoding="utf-8") as f:
-            json.dump({"last_sent_week": week_key}, f)
+            json.dump({"last_sent_week": week_key}, f)  # дублёр в репо
 
     # ПРЕДПОЧТИТЕЛЬНО: корректный ДЕЛЬТА-отчёт (всего+звёзды, WB+Ozon одним сообщением, вкл. чистые звёзды)
     status, payload = build_delta_report(mon_this)
