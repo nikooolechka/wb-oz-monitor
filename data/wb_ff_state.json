@@ -4,11 +4,11 @@
     "phase": "alerted_zero"
   },
   "мск|dental20zemlyanika": {
-    "last": 425,
+    "last": 423,
     "phase": "armed"
   },
   "мск|dental50": {
-    "last": 187,
+    "last": 184,
     "phase": "armed"
   },
   "мск|dental100zemlyanika": {
@@ -16,7 +16,7 @@
     "phase": "armed"
   },
   "мск|dental100banan": {
-    "last": 108,
+    "last": 105,
     "phase": "armed"
   },
   "мск|criol25new": {
@@ -44,7 +44,7 @@
     "phase": "armed"
   },
   "мск|oralcherry": {
-    "last": 193,
+    "last": 192,
     "phase": "armed"
   },
   "мск|dental40natural": {
@@ -52,11 +52,11 @@
     "phase": "alerted_zero"
   },
   "мск|dental40": {
-    "last": 432,
+    "last": 427,
     "phase": "armed"
   },
   "мск|dental40zemlyanika": {
-    "last": 301,
+    "last": 300,
     "phase": "armed"
   },
   "мск|extractpihta": {
@@ -72,7 +72,7 @@
     "phase": "armed"
   },
   "мск|dental100": {
-    "last": 496,
+    "last": 493,
     "phase": "alerted_zero"
   },
   "екб|dental20": {
@@ -80,7 +80,7 @@
     "phase": "alerted_low"
   },
   "екб|dental20zemlyanika": {
-    "last": 103,
+    "last": 102,
     "phase": "armed"
   },
   "екб|dental50": {
@@ -88,7 +88,7 @@
     "phase": "alerted_low"
   },
   "екб|dental100banan": {
-    "last": 16,
+    "last": 15,
     "phase": "alerted_low"
   },
   "екб|criol25new": {
@@ -112,7 +112,7 @@
     "phase": "alerted_low"
   },
   "екб|spraydlyapolostyrta": {
-    "last": 55,
+    "last": 53,
     "phase": "armed"
   },
   "екб|dental40natural": {
@@ -120,7 +120,7 @@
     "phase": "armed"
   },
   "екб|dental40": {
-    "last": 184,
+    "last": 183,
     "phase": "armed"
   },
   "екб|dental40zemlyanika": {
@@ -188,15 +188,15 @@
     "phase": "alerted_zero"
   },
   "казань|dental40natural": {
-    "last": 66,
+    "last": 65,
     "phase": "armed"
   },
   "казань|dental40": {
-    "last": 253,
+    "last": 252,
     "phase": "armed"
   },
   "казань|dental40zemlyanika": {
-    "last": 50,
+    "last": 49,
     "phase": "armed"
   },
   "казань|extractpihta": {
@@ -212,7 +212,7 @@
     "phase": "armed"
   },
   "казань|dental100": {
-    "last": 161,
+    "last": 159,
     "phase": "alerted_low"
   }
 }
