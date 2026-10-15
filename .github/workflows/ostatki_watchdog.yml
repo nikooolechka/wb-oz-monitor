@@ -1,0 +1,34 @@
+name: Сторож остатков-по-запросу (приёмник + слушатель ПК)
+
+on:
+  schedule:
+    - cron: "11,41 * * * *"   # каждые 30 мин (в :11 и :41, не на :00/:30)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ostatki-watchdog
+  cancel-in-progress: false
+
+jobs:
+  wd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install google-auth
+      - name: watchdog
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+        run: python ostatki_watchdog.py
+      - name: commit state
+        run: |
+          git config user.name asfarm-bot; git config user.email bot@asfarm
+          git add data/ostatki_watchdog_state.json || true
+          git commit -m "ostatki watchdog state [skip ci]" || true
+          git push || true
