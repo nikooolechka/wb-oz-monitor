@@ -1,4 +1,6 @@
 {
   "gw": false,
-  "pc": false
+  "pc": false,
+  "pending": null,
+  "stuck": false
 }
