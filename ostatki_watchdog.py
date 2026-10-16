@@ -10,7 +10,7 @@ except Exception: pass
 TGTOK=os.environ["TELEGRAM_BOT_TOKEN"].strip()
 CHAT=os.environ["TELEGRAM_CHAT_ID"].strip()
 SA=json.loads(os.environ["GSHEETS_SA_JSON"])
-PULT="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; HB_CELL="Лист1!E5"
+PULT="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; HB_CELL="Лист1!E5"; CMD_CELL="Лист1!E2"; RES_CELL="Лист1!E3"
 STATE="data/ostatki_watchdog_state.json"
 MSK=datetime.timezone(datetime.timedelta(hours=3))
 
@@ -70,10 +70,32 @@ def handle(flag,key,msg):
     if flag and not was:
         tg("sendMessage",{"chat_id":CHAT,"text":msg,"parse_mode":"HTML"}); print("[wd] ALERT:",key,flush=True)
     if (not flag) and was:
-        tg("sendMessage",{"chat_id":CHAT,"text":"✅ Остатки по запросу — "+("приёмник" if key=="gw" else "слушатель ПК")+" снова в норме."}); print("[wd] recovered:",key,flush=True)
+        rec={"gw":"приёмник","pc":"слушатель ПК","stuck":"запрос"}.get(key,key)
+        tg("sendMessage",{"chat_id":CHAT,"text":"✅ Остатки по запросу — "+rec+" снова в норме."}); print("[wd] recovered:",key,flush=True)
     st[key]=flag
+
+# (3) ЗАВИСШИЙ ЗАПРОС: команда в E2 есть, а результата (DONE/FAIL этого же id) в E3 нет дольше 10 мин
+stuck=False
+try:
+    cmd=cell(CMD_CELL); res=cell(RES_CELL)
+    mc=re.search(r"OSTATKI\s+(\S+)",cmd or ""); mr=re.search(r"(DONE|FAIL)\s+(\S+)",res or "")
+    cid=mc.group(1) if mc else None
+    done_id=mr.group(2) if mr else None
+    if cid and cid!=done_id:                 # есть незавершённая команда
+        pc_seen=st.get("pending")            # {id, first_ts}
+        if not pc_seen or pc_seen.get("id")!=cid:
+            st["pending"]={"id":cid,"first_ts":now.timestamp()}   # впервые видим этот запрос
+        else:
+            age=(now.timestamp()-pc_seen.get("first_ts",now.timestamp()))/60
+            print(f"[wd] незавершённый запрос {cid} возраст {age:.1f} мин",flush=True)
+            if age>10: stuck=True
+    else:
+        st["pending"]=None                   # завершён -> сбрасываем
+except Exception as e:
+    print("[wd] stuck check err",str(e)[:120],flush=True)
 
 handle(gw_down,"gw","<b>🔴 Приёмник остатков (шлюз) не отвечает</b>\nКоманда «остатки» сейчас застревает. Проверь/подними приёмник.")
 handle(pc_down,"pc","<b>🔴 Слушатель остатков на ПК замолчал</b>\nОстатки по запросу «остатки» сейчас не отработают. Проверь ПК.")
+handle(stuck,"stuck","<b>🔴 Запрос «остатки» завис</b>\nКоманда пришла, но за 10+ мин не отработала и нет ответа. Проверь ПК/1С.")
 save(st)
 print("GOTOVO",flush=True)
