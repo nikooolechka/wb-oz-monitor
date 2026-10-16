@@ -51,7 +51,10 @@ def article(name):
 if DEMAND:
     _dd=json.loads(DEMAND)
     items={}
+    _SKIP=("итого","шпиндовск","организац","склад готов","всего по")  # строки-итоги/группы 1С — НЕ товары (напр. «Организация»)
     for _nm,_sv in _dd.get('items',[]):
+        _low=(_nm or "").strip().lower()
+        if (not _low) or any(w in _low for w in _SKIP): continue
         items[norm(_nm)]=(_nm,int(_sv))
     total=_dd.get('total')
     datestr=_dd.get('datestr') or datetime.date.today().strftime('%d.%m.%Y')
@@ -145,7 +148,7 @@ for ri in range(2,len(vals)):
     if matched:
         raw,sv=items[matched]; used.add(matched)
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[sv]]})
-        if norm(raw)!=norm(nm):  # номенклатура пустая/иная -> подставляю реальную из письма
+        if not (nm or "").strip():  # Номенклатуру заполняю ТОЛЬКО если в листе пусто (артикул-строка, напр. extract/makeup при появлении); существующее имя НЕ трогаю
             updates.append({"range":f"{TAB}!{L(cN)}{ri+1}","values":[[raw]]})
     elif art:  # артикул есть, в письме нет -> 0
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[0]]})
