@@ -114,6 +114,18 @@ TOK=creds_token()
 def gapi(m,u,b=None):
     r=urllib.request.Request(u,data=(json.dumps(b).encode() if b is not None else None),method=m,headers={"Authorization":"Bearer "+TOK,"Content-Type":"application/json"})
     return json.loads(urllib.request.urlopen(r,context=CTX,timeout=60).read())
+# --- ЗАЩИТА ОТ ДУБЛЯ ДНЕВНЫХ: максимум 1 пост/день (CF-крон дёргает в окне несколько раз + бывает ручной) ---
+if not DEMAND:
+    _today=datetime.date.today().isoformat()
+    try: _last=((gapi("GET","https://sheets.googleapis.com/v4/spreadsheets/"+SID+"/values/"+urllib.parse.quote("Лист1!E7")).get("values") or [[""]])[0] or [""])[0]
+    except Exception: _last=""
+    if _last==_today:
+        print("дневные остатки уже отправлены сегодня — пропуск (защита от дубля)")
+        try:
+            for _u in ost_uids: M.copy(_u,"&BBoEPgRABDcEOAQ9BDA-"); M.store(_u,"+FLAGS","\\Deleted")
+            M.expunge()
+        except Exception: pass
+        (M and M.logout()); raise SystemExit(0)
 def L(i):
     s=""; i+=1
     while i>0: i,r=divmod(i-1,26); s=chr(65+r)+s
@@ -354,6 +366,8 @@ elif sent and not DEMAND and os.environ.get("NODELETE")!="1":
         except Exception as _e:
             print("перенос в Корзину не удался, оставляю в INBOX:",str(_e)[:90])
     M.expunge(); print(f"писем остатков перенесено в Корзину: {moved}/{len(ost_uids)}")
+    try: gapi("PUT","https://sheets.googleapis.com/v4/spreadsheets/"+SID+"/values/"+urllib.parse.quote("Лист1!E7")+"?valueInputOption=RAW",{"values":[[datetime.date.today().isoformat()]]}); print("дата дневного поста записана (E7)")
+    except Exception as _e: print("E7 write:",str(_e)[:60])
 elif os.environ.get("NODELETE")=="1": print("NODELETE=1 — письмо сохранено")
 else: print("отправка не прошла — письмо НЕ удаляю")
 (M and M.logout()); print("GOTOVO")
