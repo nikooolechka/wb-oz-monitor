@@ -249,13 +249,16 @@ else:
         if i_art is None or i_ost is None:
             print("даты готовности: не нашёл заголовки (артикул/остаток сегодня) — пропускаю")
         else:
-            up2=[]
+            up2=[]; used_dg=set()
             for ii in range(1,len(dgv)):
                 rr=dgv[ii]; nm2=rr[i_nm] if len(rr)>i_nm else ""; ar2=(rr[i_art] if len(rr)>i_art else "").strip()
                 if not ar2 or ar2.lower()=="тотал" or str(nm2).strip().lower()=="тотал": continue
                 # 🔴 ТОЧНАЯ СУММА по артикулу СКВОЗЬ упаковки (владелец 2026-10-20): dental натурал 24уп+80уп и любые
                 # такие дубли -> в «даты готовности» идёт ПОЛНАЯ сумма Свободно всех строк этого артикула, не одна упаковка.
-                ca=_canon(ar2); val=sum(ba[ca]) if ca in ba else None
+                ca=_canon(ar2)
+                if ca in ba and ca not in used_dg: val=sum(ba[ca]); used_dg.add(ca)  # 1-я строка артикула = СУММА
+                elif ca in ba: val=0                                                  # дубль-строка того же артикула -> 0 (не задваивать)
+                else: val=None
                 up2.append({"range":f"{DGTAB}!{L(i_ost)}{ii+1}","values":[[val if val is not None else 0]]})
             if up2: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":up2})
             print("даты готовности: остаток обновлён,",len(up2),"строк (колонка по заголовку)")
