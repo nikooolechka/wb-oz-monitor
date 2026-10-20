@@ -253,9 +253,9 @@ else:
             for ii in range(1,len(dgv)):
                 rr=dgv[ii]; nm2=rr[i_nm] if len(rr)>i_nm else ""; ar2=(rr[i_art] if len(rr)>i_art else "").strip()
                 if not ar2 or ar2.lower()=="тотал" or str(nm2).strip().lower()=="тотал": continue
-                ca=_canon(ar2); pk=_pack(nm2); val=None
-                if (ca,pk) in st: val=st[(ca,pk)]
-                elif len(ba.get(ca,[]))==1: val=ba[ca][0]
+                # 🔴 ТОЧНАЯ СУММА по артикулу СКВОЗЬ упаковки (владелец 2026-10-20): dental натурал 24уп+80уп и любые
+                # такие дубли -> в «даты готовности» идёт ПОЛНАЯ сумма Свободно всех строк этого артикула, не одна упаковка.
+                ca=_canon(ar2); val=sum(ba[ca]) if ca in ba else None
                 up2.append({"range":f"{DGTAB}!{L(i_ost)}{ii+1}","values":[[val if val is not None else 0]]})
             if up2: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":up2})
             print("даты готовности: остаток обновлён,",len(up2),"строк (колонка по заголовку)")
