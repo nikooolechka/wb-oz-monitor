@@ -138,13 +138,26 @@ used=set(); last_data_row=2
 # ФИЗИЧЕСКИ исключает перестановку значений (денталы 24/80 — один артикул, разные короба). См. память.
 def _pak(s): mm=re.search(r"(\d+)\s*уп",s or ""); return mm.group(1) if mm else ""
 def _can(a): a=(a or "").strip().lower(); return {"orallubrikant":"spraydlyapolostyrta"}.get(a,a)
-ekey={}; edup=set()
+# СХЛОПНУТЬ 1С-дубли ОДНОГО товара (одинаковые артикул+упаковка — напр. «Экстракт РОМАШКА»
+# и его же баркод-строка «...extract_romashka шк ...» = один артикул): СУММИРУЕМ Свободно,
+# оставляем более короткое имя. Разные упаковки (денталы 24/80) НЕ затрагиваются (упаковка в ключе).
+_grp={}
+for _k,(raw,sv) in items.items():
+    ea=_can(article(raw))
+    if ea: _grp.setdefault((ea,_pak(raw)),[]).append(_k)
+for _gk,_ks in _grp.items():
+    if len(_ks)>1:
+        _tot=sum(items[q][1] for q in _ks); _keep=min(_ks,key=lambda q:len(items[q][0]))
+        items[_keep]=(items[_keep][0],_tot)
+        for q in _ks:
+            if q!=_keep: del items[q]
+# индексы: по (артикул+упаковка) и по ОДНОМУ артикулу (для строк-артикулов с пустым именем)
+ekey={}; ekey_art={}
 for _k,(raw,sv) in items.items():
     ea=_can(article(raw))
     if ea:
-        _kk=(ea,_pak(raw))
-        if _kk in ekey: edup.add(_kk)
-        ekey[_kk]=_k
+        ekey[(ea,_pak(raw))]=_k
+        ekey_art.setdefault(ea,[]).append(_k)
 for ri in range(2,len(vals)):
     row=vals[ri]; nm=row[cN] if len(row)>cN else ""; art=row[cA] if len(row)>cA else ""
     if not (nm or art): continue
@@ -152,11 +165,15 @@ for ri in range(2,len(vals)):
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[total]]}); continue
     last_data_row=ri+1
     matched=None; sk=(_can(art),_pak(nm))
-    if sk[0] and sk in ekey and sk not in edup and ekey[sk] not in used:
+    if sk[0] and sk in ekey and ekey[sk] not in used:
         matched=ekey[sk]                                   # 1) строгий ключ артикул+упаковка
+    if matched is None and sk[0] and not (nm or "").strip():
+        # строка-артикул БЕЗ наименования (extract/makeup): матч по ОДНОМУ артикулу
+        _cand=[q for q in ekey_art.get(sk[0],[]) if q not in used]
+        if len(_cand)==1: matched=_cand[0]
     if matched is None:
         kn=norm(nm)
-        if kn and kn in items and kn not in used: matched=kn   # 2) запас — по наименованию
+        if kn and kn in items and kn not in used: matched=kn   # 3) запас — по наименованию
     if matched:
         raw,sv=items[matched]; used.add(matched)
         updates.append({"range":f"{TAB}!{L(cS)}{ri+1}","values":[[sv]]})
@@ -194,7 +211,7 @@ else:
             if not(str(_nm).strip() or str(_at).strip()) or str(_nm).strip().upper()=="ИТОГО": continue
             _sv=n1c(_r[cS] if len(_r)>cS else 0); _bsum+=_sv
             _sk=(_can(_at),_pak(_nm))
-            if _sk[0] and _sk in ekey and _sk not in edup:
+            if _sk[0] and _sk in ekey:
                 _exp=items[ekey[_sk]][1]
                 if _sv!=_exp: _bad.append((_at,_pak(_nm),_sv,_exp))
         if (total is not None and _bsum!=total) or _bad:
