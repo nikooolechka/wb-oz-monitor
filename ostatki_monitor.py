@@ -3,7 +3,7 @@
 # Матч: по «Номенклатура 1С», запас — по «Артикул» (тогда подставляю реальную номенклатуру из письма).
 # Артикул есть, в письме нет -> 0. Новый артикул -> добавляю строкой. Скрин = ВСЕ строки и столбцы.
 # ENV: MAILRU_APP_PASS, GSHEETS_SA_JSON|GSHEETS_SA_FILE, TELEGRAM_BOT_TOKEN, OSTATKI_CHAT_ID, DRY
-import os,re,html,ssl,json,io,urllib.request,urllib.parse,imaplib,email,zipfile,datetime
+import os,sys,re,html,ssl,json,io,urllib.request,urllib.parse,imaplib,email,zipfile,datetime
 from email.header import decode_header
 CTX=ssl._create_unverified_context()
 SID="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; TAB="остатки"; GID=1290662357
@@ -354,6 +354,17 @@ else:
         print("производство: D/H/%/шкала,",len(seen),"арт | цикл",cyc)
     except Exception as e:
         print("производство: ошибка",str(e)[:140])
+
+# 3d. F/G (дата поступления + комментарий) из «даты готовности» — КАЖДЫЙ съём, перед скрином,
+#     чтобы в скрин не попадали старые даты/комменты (ежечасный синхрон мог ещё не пройти; владелец 2026-10-21).
+#     Тот же dategot_fg_sync.py (матч артикул+упаковка, только значения). Сбой синхрона скрин НЕ блокирует.
+if not DRY:
+    try:
+        import subprocess
+        _fg=subprocess.run([sys.executable,os.path.join(os.path.dirname(os.path.abspath(__file__)),"dategot_fg_sync.py")],
+                           capture_output=True,text=True,timeout=120)
+        print("F/G синхрон:",(_fg.stdout or "").strip().splitlines()[-2:] or _fg.stderr[-200:])
+    except Exception as e: print("F/G синхрон: ошибка",str(e)[:140])
 
 # 4. скрин: ВСЕ строки + ВСЕ столбцы (до последнего с данными)
 png=None
