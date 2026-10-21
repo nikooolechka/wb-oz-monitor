@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import re
 import json
 import tempfile
 
@@ -38,6 +39,51 @@ SOURCES = [
     # ПЕРЕЕЗД 2026-09-11: старая таблица 11ijV3JWhkyUxysv… больше НЕ используется.
     ("ОЗОН", "18PHOlKcIoXUFiw3ReXCDESzy-_TXQvcdFcVmJJUiCjs", "юнитка NEW"),
 ]
+
+# МАТРИЦА (ОП АС Фарм): проверяем, что товар из юнитки заведён сюда (владелец
+# «в юнитку завожу, в матрицу могу забыть»). Нет в матрице / нет эталона V → алерт.
+MATRIX = ("1sHlFGSVB-7V8V4q6kvcTR1rrw19EaabIaOgrCHU0DHE", "МАТРИЦА")
+_PLAT_WORDS = {"ozon", "озон", "оз", "wb", "вб", "ям", "дм", "yandex", "детмир"}
+
+def _norm(s):
+    return re.sub(r"[^a-z0-9а-яё]", "", (s or "").lower())
+
+def read_matrix(gc):
+    """Возвращает (arts, has_v): множество нормализованных артикулов матрицы и
+    dict{норм.артикул: есть ли эталон габаритов в столбце V}. Столбцы ищем по
+    ЗАГОЛОВКУ (матрица двигается — по буквам нельзя)."""
+    sid, tab = MATRIX
+    rows = gc.open_by_key(sid).worksheet(tab).get_all_values()
+    cN = cV = None
+    for r in rows[:4]:
+        for j, h in enumerate(r):
+            hs = (h or "").strip().lower()
+            if hs == "артикул" and cN is None:
+                cN = j
+            if "габарит" in hs and cV is None:
+                cV = j
+    arts, has_v = set(), {}
+    if cN is None:
+        return arts, has_v
+    for r in rows:
+        cell = r[cN] if len(r) > cN else ""
+        gab = (r[cV].strip() if cV is not None and len(r) > cV else "")
+        for line in str(cell).split("\n"):
+            toks = [t for t in line.split() if t.lower() not in _PLAT_WORDS]
+            key = _norm(" ".join(toks))
+            if len(key) >= 3:
+                arts.add(key)
+                has_v[key] = has_v.get(key, False) or bool(gab)
+    return arts, has_v
+
+
+def msg_not_in_matrix(art) -> str:
+    return (f"🧩 Товар <b>{_esc(art)}</b> есть в юнитке, но НЕ заведён в МАТРИЦУ."
+            "\nДобавь в матрицу (или напиши в Claude — заведу и сверю габариты).")
+
+def msg_no_etalon(art) -> str:
+    return (f"🧩 Товар <b>{_esc(art)}</b> в матрице БЕЗ эталона габаритов (столбец V)."
+            "\nПроставь габариты (или напиши в Claude).")
 
 
 def _load() -> dict:
@@ -154,11 +200,18 @@ def run_once() -> None:
     known = set(state.get("known", []))
     dims_state = state.get("dims", {})
 
-    # 1) НОВЫЕ товары (имя не встречалось раньше) → очередь, НЕ в канал
+    # 1) НОВЫЕ товары (имя не встречалось раньше) → очередь (ко мне) + АЛЕРТ в канал,
+    #    но ТОЛЬКО если новый товар забыт в МАТРИЦЕ или без эталона V (владелец: «в юнитку
+    #    завожу, в матрицу могу забыть»). Старое/мусор уже в known → не триггерит, лавины нет.
     new_names = sorted(n for n in name_plat if n not in known)
     if new_names:
         queue = _load_new_products()
         pending = {q["art"] for q in queue}
+        try:
+            marts, mhasv = read_matrix(gc)
+        except Exception as e:
+            marts, mhasv = None, {}
+            print(f"[WARN] матрица не прочитана: {e}", flush=True)
         for n in new_names:
             label = " и ".join(sorted(name_plat[n]))
             dv = next((cur_dims[f"{p}|{n}"] for p in sorted(name_plat[n]) if f"{p}|{n}" in cur_dims), None)
@@ -170,6 +223,15 @@ def run_once() -> None:
                 k = f"{p}|{n}"
                 if k in cur_dims:
                     dims_state[k] = {"ref": cur_dims[k], "last": cur_dims[k]}
+            # алерт в канал — только если новый товар реально «забыт» в матрице
+            if marts is not None:
+                key = _norm(n)
+                if key not in marts:
+                    notify.send(msg_not_in_matrix(n))
+                    print(f"[MATRIX-ALERT] {n}: нет в матрице", flush=True)
+                elif not mhasv.get(key, False):
+                    notify.send(msg_no_etalon(n))
+                    print(f"[MATRIX-ALERT] {n}: в матрице без эталона V", flush=True)
             print(f"[NEW] новый товар: {n} ({label}) {dv or 'без габаритов'}", flush=True)
         _save_new_products(queue)
 
