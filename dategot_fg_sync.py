@@ -33,12 +33,13 @@ i_art=find("артикул"); i_nm=find("назван") or 0; i_date=find("да�
 i_note=find("симаков") or find("нартов") or (i_date+1 if i_date is not None else None)
 if i_art is None or i_date is None:
     print("не нашёл заголовки артикул/дата поступления — выход"); raise SystemExit(1)
-src={}
+src={}; by_art={}   # by_art: запасной матч ТОЛЬКО по артикулу (строка «остатки» без названия -> упаковки нет)
 for r in dg[1:]:
     art=(r[i_art] if len(r)>i_art else "").strip(); nm=r[i_nm] if len(r)>i_nm else ""
     if not art or art.lower()=="тотал": continue
     dt=(r[i_date] if len(r)>i_date else ""); note=(r[i_note] if (i_note is not None and len(r)>i_note) else "")
     src[(canon(art),pack(nm))]=(dt,note)
+    by_art.setdefault(canon(art),[]).append((dt,note))
 print("источник F/G:",len(src))
 
 # --- сетку вкладки «остатки» ТОЛЬКО РАСШИРЯЕМ, НИКОГДА не ужимаем: ужатие до 8 срезало служебные
@@ -60,7 +61,10 @@ for i in range(2,len(ov)):
     r=ov[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
     if not art or art.upper()=="ИТОГО" or str(nm).strip().upper()=="ИТОГО": continue
     key=(canon(art),pack(nm))
-    dt,note=src.get(key,src.get((canon(art),""),("","")))
+    if key in src: dt,note=src[key]
+    elif (canon(art),"") in src: dt,note=src[(canon(art),"")]
+    elif len(by_art.get(canon(art),[]))==1: dt,note=by_art[canon(art)][0]   # артикул один в «даты готовности» -> он (напр. makeup_30 без названия, 21.10)
+    else: dt,note=("","")   # несколько упаковок и упаковку не определить -> не угадываем
     upd.append({"range":f"{OSTTAB}!F{i+1}","values":[[dt]]})
     upd.append({"range":f"{OSTTAB}!G{i+1}","values":[[note]]})
 if not DRY:
