@@ -184,9 +184,9 @@ def oz_detailed(date_to):
         r = _oz_posting_list({            # v4 (авто-фолбэк на след. версию, если Ozon выпилит)
             "dir": "asc", "filter": {"since": since, "to": to, "status": ""},
             "limit": 100, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
-        ps = r.get("result", {}).get("postings", [])
+        ps = r.get("postings") or r.get("result", {}).get("postings", [])   # v4: на верхнем уровне; v3: под result
         for p in ps:
-            ca = p.get("created_at") or p.get("in_process_at")
+            ca = p.get("created_at") or p.get("in_process_at")   # v4: created_at=None -> берём in_process_at
             if not ca:
                 continue
             dt = datetime.fromisoformat(ca.replace("Z", "+00:00")).astimezone(MSK)
@@ -201,7 +201,10 @@ def oz_detailed(date_to):
                 q = int(pr.get("quantity", 0) or 0)
                 data.setdefault(ds, {}).setdefault(art, {})
                 data[ds][art][wid] = data[ds][art].get(wid, 0) + q
-        if len(ps) < 100:
+        has_next = r.get("has_next")
+        if has_next is None:
+            has_next = len(ps) == 100        # v3-совместимость (нет has_next)
+        if not has_next:
             break
         offset += 100
         time.sleep(0.2)
