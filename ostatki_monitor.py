@@ -296,9 +296,12 @@ else:
         newst={}; prod_art={}
         for k,(raw,sv) in items.items():
             key=_cn(article(raw))+"|"+_pk(raw); st0=stm.get(key)
-            if (st0 is None) or (st0[2]!=cyc): prod=sv; last=sv
+            # 🔴 На старте цикла «произведено»=0 (владелец 2026-10-21: считать ЧИСТЫЙ ФАКТ произведённого за месяц,
+            #    НЕ учитывать стартовый остаток/то что лежало до начала). last=sv — база для будущих приростов.
+            #    Октябрь (текущий цикл) НЕ затрагивается — у него cyc уже стоит, идёт ветка приростов ниже.
+            if (st0 is None) or (st0[2]!=cyc): prod=0; last=sv
             else:
-                d=sv-st0[0]; prod=st0[1]+(d if d>0 else 0); last=sv
+                d=sv-st0[0]; prod=st0[1]+(d if d>0 else 0); last=sv   # += только НОВОЕ производство (прирост Свободно)
             newst[key]=(last,prod,cyc); _a=_cn(article(raw)); prod_art[_a]=prod_art.get(_a,0)+prod
         strows=[[k,newst[k][0],newst[k][1],newst[k][2]] for k in newst]
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}:clear",{})
