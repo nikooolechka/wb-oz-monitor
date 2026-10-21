@@ -321,10 +321,13 @@ else:
             c=_cn(art)
             if c in seen: continue
             seen.add(c); row=i+1; pot=potra.get(c); prod=prod_art.get(c,0)
-            vw.append({"range":f"{TAB}!H{row}","values":[[prod]]})          # произведено (служебн.)
-            vw.append({"range":f"{TAB}!I{row}","values":[[pot if pot is not None else ""]]})  # потребность (служебн.)
+            ost=n1c(r[2]) if len(r)>2 else 0                                 # ОСТАТОК (Свободно, столбец C)
+            vw.append({"range":f"{TAB}!H{row}","values":[[prod]]})          # произведено (служебн., для истории)
+            vw.append({"range":f"{TAB}!I{row}","values":[[pot if pot is not None else ""]]})  # потребность=цель (долг+след.мес)
             if pot:
-                pct=prod/pot; vw.append({"range":f"{TAB}!J{row}","values":[[pct]]})           # % (служебн.)
+                # 🔴 ШКАЛА = ОСТАТОК / ЦЕЛЬ (владелец 2026-10-21): сколько из нужного (долг окт + потр ноя)
+                #    УЖЕ есть на складе. НЕ от «произведено» (оно накопленное -> было всё зелёное = баг).
+                pct=ost/pot; vw.append({"range":f"{TAB}!J{row}","values":[[pct]]})           # % выполнения (служебн.)
                 col=_gh(pct)
                 bar=max(0,min(int(round(pct*100)),100))   # доля заливки 0..100 ЛИТЕРАЛОМ в формулу
                 # число зашито ПРЯМО в SPARKLINE, без ссылок на H/I -> шкала НЕ ломается (#REF!), если владелец
