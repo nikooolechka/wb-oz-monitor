@@ -179,14 +179,24 @@ def oz_detailed(date_to):
     data, names = {}, {}
     since = START.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     to = date_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    offset = 0
-    for _ in range(400):
-        r = _oz_posting_list({            # v4 (авто-фолбэк на след. версию, если Ozon выпилит)
-            "dir": "asc", "filter": {"since": since, "to": to, "status": ""},
-            "limit": 100, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
-        ps = r.get("postings") or r.get("result", {}).get("postings", [])   # v4: на верхнем уровне; v3: под result
+    # 🔴 v4 ИГНОРИРУЕТ offset (проверено 21.10: offset0==offset100) — пагинация ТОЛЬКО по CURSOR.
+    #    + дедуп по posting_number (защита от повторного счёта, если страницы перекроются).
+    cursor = None
+    seen = set()
+    for _ in range(300):
+        body = {"dir": "asc", "filter": {"since": since, "to": to, "status": ""},
+                "limit": 100, "with": {"analytics_data": False, "financial_data": False}}
+        if cursor:
+            body["cursor"] = cursor
+        r = _oz_posting_list(body)
+        ps = r.get("postings") or r.get("result", {}).get("postings", [])   # v4: верхний уровень; v3: под result
+        new_cnt = 0
         for p in ps:
-            ca = p.get("created_at") or p.get("in_process_at")   # v4: created_at=None -> берём in_process_at
+            pn = p.get("posting_number")
+            if pn in seen:
+                continue                  # уже считали это отправление — пропускаем (без задвоения)
+            seen.add(pn); new_cnt += 1
+            ca = p.get("created_at") or p.get("in_process_at")   # v4: created_at=None -> in_process_at
             if not ca:
                 continue
             dt = datetime.fromisoformat(ca.replace("Z", "+00:00")).astimezone(MSK)
@@ -201,12 +211,12 @@ def oz_detailed(date_to):
                 q = int(pr.get("quantity", 0) or 0)
                 data.setdefault(ds, {}).setdefault(art, {})
                 data[ds][art][wid] = data[ds][art].get(wid, 0) + q
+        cursor = r.get("cursor")
         has_next = r.get("has_next")
         if has_next is None:
-            has_next = len(ps) == 100        # v3-совместимость (нет has_next)
-        if not has_next:
+            has_next = len(ps) == 100
+        if not has_next or new_cnt == 0 or not cursor:   # дальше нет / повторы / нет курсора -> стоп
             break
-        offset += 100
         time.sleep(0.2)
     return data, names
 
