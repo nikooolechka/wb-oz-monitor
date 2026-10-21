@@ -327,7 +327,7 @@ else:
         seen=set(); vw=[{"range":f"{TAB}!D1","values":[["шкала выполнения относительно потребности"]]},{"range":f"{TAB}!I1","values":[["потребность"]]},{"range":f"{TAB}!J1","values":[["% выполнения"]]}]; fmt=[]
         if _d2lbl:
             vw.append({"range":f"{TAB}!D2","values":[[_d2lbl]]})
-            fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":3,"endColumnIndex":4},"cell":{"userEnteredFormat":{"textFormat":{"bold":True,"foregroundColor":{"red":1.0,"green":0.0,"blue":0.0}},"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.horizontalAlignment"})
+            fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":3,"endColumnIndex":4},"cell":{"userEnteredFormat":{"textFormat":{"bold":True,"foregroundColor":{"red":1.0,"green":0.0,"blue":0.0}},"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.horizontalAlignment"}})
         for i in range(2,len(ov2)):
             r=ov2[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
             if not art or art.upper()=="ИТОГО" or str(nm).strip().upper()=="ИТОГО": continue
