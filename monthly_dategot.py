@@ -28,7 +28,15 @@ def L(i):
     s=""; i+=1
     while i>0: i,r=divmod(i-1,26); s=chr(65+r)+s
     return s
-def canon(a): return (a or "").strip().lower()
+ALIAS={"orallubrikant":"spraydlyapolostyrta"}   # один товар, два имени
+def canon(a): a=(a or "").strip().lower(); return ALIAS.get(a,a)
+SID_PROD="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"   # «АС ФАРМ клод код» (вкладка произв_стейт)
+def tg_msg(text):
+    try:
+        t=os.environ["TELEGRAM_BOT_TOKEN"].strip(); c=os.environ["TELEGRAM_CHAT_ID"].strip()
+        body=urllib.parse.urlencode({"chat_id":c,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true"}).encode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage",data=body),context=CTX,timeout=25).read()
+    except Exception as e: print("tg_msg err",str(e)[:120])
 def alert():
     try:
         t=os.environ["TELEGRAM_BOT_TOKEN"].strip(); c=os.environ["TELEGRAM_CHAT_ID"].strip()
@@ -67,17 +75,34 @@ if ready:
     i_art=find("артикул"); i_potr=find("потребность"); i_nm=find("назван") or 0
     if i_art is None or i_potr is None:
         print("нет заголовков артикул/потребность — выход"); raise SystemExit(1)
+    # ДОЛГ: произведено завершающегося месяца из «произв_стейт» (клод-код) + алиас
+    prodm={}
+    try:
+        for r in gv(SID_PROD,"произв_стейт!A1:D300"):
+            if r and r[0]:
+                k=canon(r[0].split("|")[0]); d=re.sub(r"[^\d]","",str(r[2] if len(r)>2 else "")); prodm[k]=prodm.get(k,0)+(int(d) if d else 0)
+    except Exception as e:
+        print("произв_стейт err",str(e)[:100])
+    def _num(x): d=re.sub(r"[^\d]","",str(x or "")); return int(d) if d else 0
     upd=[]; seen=set()
     for i in range(1,len(dg)):
         r=dg[i]; nm=r[i_nm] if len(r)>i_nm else ""; art=(r[i_art] if len(r)>i_art else "").strip()
         if not art or art.lower()=="тотал" or str(nm).strip().lower()=="тотал": continue
         al=canon(art)
-        if al in seen: continue
-        if al in potr: upd.append({"range":f"{DGTAB}!{L(i_potr)}{i+1}","values":[[potr[al]]]}); seen.add(al)
+        if al in seen:
+            upd.append({"range":f"{DGTAB}!{L(i_potr)}{i+1}","values":[[""]]}); continue  # дубль артикула -> пусто
+        if al not in potr and al not in prodm: continue   # нет данных по артикулу — не трогаем
+        seen.add(al)
+        # долг завершающегося месяца = ТЕКУЩАЯ цель (с накопленным долгом) − произведено
+        cur_target=_num(r[i_potr] if len(r)>i_potr else "")
+        debt=max(0, cur_target - prodm.get(al,0))
+        new_target=debt + potr.get(al,0)                  # + потребность СЛЕДУЮЩЕГО месяца
+        upd.append({"range":f"{DGTAB}!{L(i_potr)}{i+1}","values":[[new_target]]})
     if not DRY:
         if upd: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":upd})
         gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+'!B1')}?valueInputOption=USER_ENTERED",{"values":[[TGT_UP]]})
-    print(f"{'[DRY] ' if DRY else ''}потребность {len(upd)} строк + B1 -> {TGT_UP}")
+        tg_msg(f"<b>Потребности обновил ✅</b>\nШкала учитывает долг производства за текущий месяц + потребность {TGT_UP}.")
+    print(f"{'[DRY] ' if DRY else ''}потребность(долг+след.мес) {len(upd)} строк + B1 -> {TGT_UP}")
 else:
     print("потребность след. месяца НЕ готова (нет вкладки / нули) — не пишу")
     if now.day==22:    # алерт один раз, 22-го
