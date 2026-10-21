@@ -318,7 +318,16 @@ else:
         # расширить сетку до 11 столбцов (бар D + служебные H/I/J)
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":OSTGID,"gridProperties":{"columnCount":11}},"fields":"gridProperties.columnCount"}}]})
         ov2=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+chr(33)+'A1:K80')}").get("values",[])
+        # подпись под баром (D2): «долг {пред.мес} + {цель.мес}» — меняется САМА каждый месяц по целевому месяцу B1 «даты готовности» (владелец 2026-10-21)
+        _MO=["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"]
+        _AB={"январь":"янв","февраль":"фев","март":"мар","апрель":"апр","май":"май","июнь":"июн","июль":"июл","август":"авг","сентябрь":"сен","октябрь":"окт","ноябрь":"ноя","декабрь":"дек"}
+        _b1m=str(_dg[0][1]).strip().lower() if (_dg and _dg[0] and len(_dg[0])>1) else ""
+        _ti=_MO.index(_b1m) if _b1m in _MO else -1
+        _d2lbl=(f"долг {_AB[_MO[(_ti-1)%12]]} + {_AB[_MO[_ti]]}" if _ti>=0 else "")
         seen=set(); vw=[{"range":f"{TAB}!D1","values":[["шкала выполнения относительно потребности"]]},{"range":f"{TAB}!I1","values":[["потребность"]]},{"range":f"{TAB}!J1","values":[["% выполнения"]]}]; fmt=[]
+        if _d2lbl:
+            vw.append({"range":f"{TAB}!D2","values":[[_d2lbl]]})
+            fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":1,"endRowIndex":2,"startColumnIndex":3,"endColumnIndex":4},"cell":{"userEnteredFormat":{"textFormat":{"bold":True,"foregroundColor":{"red":1.0,"green":0.0,"blue":0.0}},"horizontalAlignment":"CENTER"}},"fields":"userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.foregroundColor,userEnteredFormat.horizontalAlignment"})
         for i in range(2,len(ov2)):
             r=ov2[i]; nm=r[0] if r else ""; art=(r[1] if len(r)>1 else "").strip()
             if not art or art.upper()=="ИТОГО" or str(nm).strip().upper()=="ИТОГО": continue
