@@ -24,7 +24,7 @@ TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID. DRY=1 — только лог.
 """
 from __future__ import annotations
 
-import os, json, time, ssl, re, urllib.request
+import os, json, time, ssl, re, urllib.request, urllib.error
 from datetime import datetime, timedelta, timezone
 
 import gspread
@@ -70,17 +70,33 @@ TOKEN = os.environ["WB_TOKEN"].strip()
 
 def _get(url):
     req = urllib.request.Request(url, headers={"Authorization": TOKEN})
-    with urllib.request.urlopen(req, context=CTX, timeout=90) as r:
-        return json.load(r)
+    for attempt in range(6):                       # 429-бэкофф: WB лимитит -> ждём и повторяем, не падаем
+        try:
+            with urllib.request.urlopen(req, context=CTX, timeout=90) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 5:
+                wait = min(60, 12 * (attempt + 1))
+                print(f"  429 на GET, жду {wait}с (попытка {attempt+1}/5)")
+                time.sleep(wait); continue
+            raise
 
 
 def _post(url, body, headers=None):
     data = json.dumps(body).encode()
     h = {"Content-Type": "application/json"}
     h.update(headers or {"Authorization": TOKEN})
-    req = urllib.request.Request(url, data=data, method="POST", headers=h)
-    with urllib.request.urlopen(req, context=CTX, timeout=90) as r:
-        return json.load(r)
+    for attempt in range(6):
+        req = urllib.request.Request(url, data=data, method="POST", headers=h)
+        try:
+            with urllib.request.urlopen(req, context=CTX, timeout=90) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 5:
+                wait = min(60, 12 * (attempt + 1))
+                print(f"  429 на POST, жду {wait}с (попытка {attempt+1}/5)")
+                time.sleep(wait); continue
+            raise
 
 
 def _oz(path, body):
@@ -132,7 +148,7 @@ def wb_detailed(date_to):
             nxt = d.get("next", 0)
             if not orders or not nxt:
                 break
-            time.sleep(0.25)
+            time.sleep(0.6)
         cur = cur + timedelta(days=25)
     return data
 
@@ -239,7 +255,7 @@ def wb_stock_by_wh(wb_whs):
                 k = _norm(art)
                 acc[k] = acc.get(k, 0) + amt
                 names.setdefault(k, art)
-            time.sleep(0.25)
+            time.sleep(0.6)
         per[wid] = acc
     return per, names
 
