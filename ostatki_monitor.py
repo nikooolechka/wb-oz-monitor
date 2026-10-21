@@ -24,6 +24,10 @@ def article(name):
         if "ромашк" in n: return "extract_romashka"
         if "пихт" in n: return "extract_pihta"
     if "ирригатор" in n:
+        # НОВЫЙ АРТИКУЛ (2026-10-21): набор 3шт литровых ирригаторов-жидкости в коробке. Пока НЕ на ВБ/Озон,
+        # точное 1С-имя неизвестно -> ловим по признаку набора + 1л. ВЫШЕ обычного Irrigator_1000, чтобы не слить.
+        if ("1л" in n or "1 л" in n or "литр" in n) and ("набор" in n or "3 шт" in n or "3шт" in n or "3 штук" in n or "х3" in n or "x3" in n or "комплект" in n):
+            return "Irrigator_1000_nabor3"
         if "new 2026 1" in n: return "irrigator_new_1"
         if "new 2026 500" in n: return "irrigator_new_05"
         if "1л" in n: return "Irrigator_1000"
