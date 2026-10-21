@@ -39,7 +39,7 @@ from googleapiclient.discovery import build
 
 MSK = timezone(timedelta(hours=3))
 SHEET = os.environ["PRICES_SHEET_ID"]
-DEDUP_CELL = "Лист1!CZ1"   # анти-дубль скрина: застолбить окно (день,фаза) в ячейке ДО отправки (мгновенно, без git-задержки)
+DEDUP_CELL = "Лист1!BC1"   # анти-дубль скрина: застолбить окно (день,фаза) в ячейке ДО отправки (мгновенно, без git-задержки)
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("PRICES_SCREENSHOT_CHAT_ID", "").strip()  # чат ОТДЕЛА; пусто → не шлём
