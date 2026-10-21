@@ -106,6 +106,26 @@ def _oz(path, body):
         "Content-Type": "application/json"})
 
 
+def _oz_posting_list(body):
+    """FBS-отправления Ozon с САМО-АДАПТАЦИЕЙ под смену версий метода. Ozon периодически выпиливает
+    старые версии (ответ 400 `obsolete method cannot be used` — так сломалось 17.10, v3 убрали).
+    Пробуем версии по порядку и берём ПЕРВУЮ живую: когда Ozon выпилит v4, автомат сам перейдёт
+    на v5/v6 без правок и без моего участия."""
+    last = None
+    for ver in ("v4", "v5", "v6", "v3"):
+        try:
+            return _oz(f"/{ver}/posting/fbs/list", body)
+        except urllib.error.HTTPError as e:
+            txt = ""
+            try: txt = e.read().decode()
+            except Exception: pass
+            if e.code == 400 and "obsolete" in txt.lower():
+                print(f"  Ozon /{ver}/posting/fbs/list устарел -> пробую следующую версию")
+                last = ver; continue
+            raise
+    raise RuntimeError(f"ВСЕ версии Ozon posting/fbs/list устарели (посл. {last}) — Ozon сменил API сильнее, нужна ручная правка")
+
+
 def wb_wh_list():
     """Все FBS-склады продавца WB динамически. Порядок: Краснодар, Софьино, затем новые по id.
     Появился новый склад → он сам станет колонкой (Ozon-блок сдвинется правее)."""
@@ -160,10 +180,10 @@ def oz_detailed(date_to):
     since = START.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     to = date_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     offset = 0
-    for _ in range(100):
-        r = _oz("/v3/posting/fbs/list", {
+    for _ in range(400):
+        r = _oz_posting_list({            # v4 (авто-фолбэк на след. версию, если Ozon выпилит)
             "dir": "asc", "filter": {"since": since, "to": to, "status": ""},
-            "limit": 1000, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
+            "limit": 100, "offset": offset, "with": {"analytics_data": False, "financial_data": False}})
         ps = r.get("result", {}).get("postings", [])
         for p in ps:
             ca = p.get("created_at") or p.get("in_process_at")
@@ -181,9 +201,9 @@ def oz_detailed(date_to):
                 q = int(pr.get("quantity", 0) or 0)
                 data.setdefault(ds, {}).setdefault(art, {})
                 data[ds][art][wid] = data[ds][art].get(wid, 0) + q
-        if len(ps) < 1000:
+        if len(ps) < 100:
             break
-        offset += 1000
+        offset += 100
         time.sleep(0.2)
     return data, names
 
@@ -657,5 +677,24 @@ def main():
     # Алерты о приходе товара (Казань и любой новый склад) вынесены в отдельный автомат «Приходы».
 
 
+def _alert_fail(err):
+    """САМО-АЛЕРТ в канал «АС Фарм изменения» при падении монитора — чтобы о поломке я/владелец
+    узнавали СРАЗУ (а не через дни), и не приходилось писать «опять сломалось». Владелец 2026-10-21."""
+    try:
+        import urllib.parse as _up
+        t = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(); c = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        if not t or not c:
+            return
+        msg = f"<b>FBS-монитор упал</b>\n{str(err)[:300]}\nВозможно Ozon/WB снова сменили API — нужна проверка."
+        body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML"}).encode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage", data=body), context=CTX, timeout=25).read()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        _alert_fail(e)      # сам сообщит в канал, что сломался
+        raise
