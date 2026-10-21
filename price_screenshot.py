@@ -43,6 +43,7 @@ SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("PRICES_SCREENSHOT_CHAT_ID", "").strip()  # чат ОТДЕЛА; пусто → не шлём
 DRY = os.environ.get("DRY") == "1"
+FORCE = os.environ.get("FORCE") == "1"   # разовый досыл в любое время, мимо окна и дедупа (ручной catch-up)
 
 # маркеты, чью свежесть ТРЕБУЕМ для отправки (основной прогон ПК): столбец-заголовок 0-based
 REQUIRE = [("ВБ", 1), ("Озон", 7), ("ЯМ", 14), ("ДМ", 20)]
@@ -163,7 +164,7 @@ def main():
     # кривое время (GitHub-крон срабатывает не в срок: 15:41, 21:14…). Вне окна НЕ шлём —
     # тогда скрин уходит только около 10:30 и 17:30, чем бы прогон ни запустился.
     SEND_WINDOW = {"morning": range(9, 12), "evening": range(16, 19)}  # утро 9–11, вечер 16–18
-    if now.hour not in SEND_WINDOW[phase]:
+    if now.hour not in SEND_WINDOW[phase] and not FORCE:
         print(f"[screenshot] {now:%H:%M} вне окна отправки {phase} — пропуск (шлём ~10:30 и ~17:30)", flush=True)
         return
     # выходные (сб=5, вс=6): вечерний скрин НЕ шлём, только утренний 10:30
@@ -175,7 +176,7 @@ def main():
         return
     # дедуп: один альбом на (день, окно) — чтобы ручной запуск и крон не прислали дважды
     st = _load_state()
-    if not DRY and phase in st.get(today, []):
+    if not DRY and not FORCE and phase in st.get(today, []):
         print(f"[screenshot] за окно {phase} {today} уже отправлено — пропуск (без дубля)", flush=True)
         return
     notes = notes_row1()

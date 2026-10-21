@@ -10,6 +10,9 @@ on:
       dry:
         description: "1 = проверить свежесть и собрать скрины, но НЕ отправлять"
         default: ""
+      force:
+        description: "1 = дослать СЕЙЧАС мимо окна времени и дедупа (разовый catch-up)"
+        default: ""
 
 permissions:
   contents: write
@@ -35,6 +38,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           PRICES_SCREENSHOT_CHAT_ID: ${{ secrets.PRICES_SCREENSHOT_CHAT_ID }}
           DRY: ${{ github.event.inputs.dry }}
+          FORCE: ${{ github.event.inputs.force }}
         run: python price_screenshot.py
       - name: Сохранить дедуп-состояние
         run: |
