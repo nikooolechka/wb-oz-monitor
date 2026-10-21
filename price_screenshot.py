@@ -39,6 +39,7 @@ from googleapiclient.discovery import build
 
 MSK = timezone(timedelta(hours=3))
 SHEET = os.environ["PRICES_SHEET_ID"]
+DEDUP_CELL = "Лист1!CZ1"   # анти-дубль скрина: застолбить окно (день,фаза) в ячейке ДО отправки (мгновенно, без git-задержки)
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("PRICES_SCREENSHOT_CHAT_ID", "").strip()  # чат ОТДЕЛА; пусто → не шлём
@@ -237,6 +238,24 @@ def main():
     photos = [export_png(r, creds.token) for r in screens]
     cap = f"цены на {now:%d.%m} от {now:%H:%M}"
     print(f"[screenshot] цены свежие — шлю альбом: «{cap}»", flush=True)
+    # 🔴 АНТИ-ДУБЛЬ (владелец 2026-10-21: вечерний скрин пришёл ДВАЖДЫ): в 17:30 стартуют несколько триггеров
+    #   (CF+Яндекс+GitHub-крон) почти одновременно; git-файл-дедуп обновлялся слишком медленно -> оба слали.
+    #   Застолбить окно (день,фаза) в ЯЧЕЙКЕ таблицы ДО отправки — кто первый записал, тот и шлёт; второй молчит.
+    if not DRY and not FORCE:
+        try:
+            svc_d = build("sheets", "v4", credentials=_creds(["https://www.googleapis.com/auth/spreadsheets"]), cache_discovery=False)
+            _v = svc_d.spreadsheets().values().get(spreadsheetId=SHEET, range=DEDUP_CELL).execute().get("values", [])
+            _dd = json.loads(_v[0][0]) if (_v and _v[0] and _v[0][0]) else {}
+            _sent = _dd.get("sent", []) if _dd.get("date") == today else []
+            if phase in _sent:
+                print(f"[screenshot] окно {phase} {today} уже застолблено другим прогоном — НЕ шлю (анти-дубль)", flush=True)
+                return
+            _sent.append(phase)
+            svc_d.spreadsheets().values().update(spreadsheetId=SHEET, range=DEDUP_CELL, valueInputOption="RAW",
+                body={"values": [[json.dumps({"date": today, "sent": _sent}, ensure_ascii=False)]]}).execute()
+            print(f"[screenshot] окно {phase} {today} застолблено — шлю", flush=True)
+        except Exception as _e:
+            print("[screenshot] дедуп-ячейка ошибка (шлю как обычно):", str(_e)[:80], flush=True)
     if DRY:
         print("[screenshot] DRY=1 — не отправляю, скрины собраны ок")
         return
