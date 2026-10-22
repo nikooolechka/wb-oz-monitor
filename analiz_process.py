@@ -135,6 +135,33 @@ def _pc_heartbeat_fresh(max_age_sec=600):
         return (now - t).total_seconds() < max_age_sec
     except Exception: return False
 
+def wb_price_pc(nm, timeout=300):
+    """Живая цена WB с витрины — только через ПК-браузер (card.wb.ru блокирует отовсюду).
+    Возвращает {"price":..,"price_old":..} или None при сбое — тогда карточка идёт БЕЗ цены,
+    а не падает (контент/отзывы уже собраны облаком, это отдельный необязательный шаг)."""
+    if not _pc_heartbeat_fresh():
+        wait_start = time.time()
+        while time.time() - wait_start < 1800:
+            time.sleep(30)
+            if _pc_heartbeat_fresh(): break
+        else:
+            return None
+    swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+           "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/wb_price_pc.py' -OutFile \"$d\\wb_price_pc.py\";"
+           f"& $py \"$d\\wb_price_pc.py\" {nm} 2>&1 | Select-String 'WBPRICE' | Select-Object -Last 1")
+    start=time.time()
+    while time.time()-start<timeout:
+        time.sleep(15)
+        a1=sread(PRICE_LOG)
+        m=re.search(r"WBPRICE<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
+        if m:
+            try:
+                d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
+                if d.get("price"): return {"price": d.get("price"), "price_old": d.get("price_old")}
+                return None
+            except Exception: return None
+    return None
+
 def oz_collect(pid, timeout=420):
     # Если ПК сейчас не отвечает (сессия упала) — НЕ кидаем команду вхолостую. На маке уже крутится
     # сторож com.asfarm.pcwatch, который сам следит за heartbeat A4 и сам поднимает сессию ПК через
@@ -639,6 +666,11 @@ def process_one():
         elif re.search(r"wildberries\.|\.wb\.ru", url):
             m=re.search(r"/catalog/(\d+)", url)
             data=wb_collect(m.group(1)) if m else None
+            if data and not data.get("_pc_down"):
+                # Живая цена WB — отдельный шаг через ПК-браузер (контент/отзывы уже собраны
+                # облаком и не зависят от ПК). Сбой здесь НЕ валит карточку — просто без цены.
+                pr = wb_price_pc(m.group(1))
+                if pr: data["price"], data["price_old"] = pr.get("price"), pr.get("price_old")
         else:
             data=None
         if data and data.get("_pc_down"):
