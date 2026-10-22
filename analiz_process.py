@@ -16,17 +16,59 @@ BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
 GH_PAT = os.environ["GH_PAT"]
 
-# Наши собственные товары (СТМ АС-Фарм) — WB SKU из CLAUDE.md "Список активных товаров".
+# Наши собственные товары (СТМ АС-Фарм) — WB SKU из CLAUDE.md, как подстраховка на случай,
+# если МАТРИЦА (ниже) окажется недоступна. ОСНОВНОЙ источник — живая МАТРИЦА (ОП АС Фарм),
+# там уже есть ссылки на ВСЕ наши товары по ВСЕМ площадкам (WB/Ozon/ЯМ/ДМ), ведётся вручную
+# владельцем — не надо дублировать в код и забывать обновлять на каждый новый SKU.
 STM_WB_NM = {205348527, 583154383, 583155047, 140759945, 860793985, 892991707, 76952248,
              860789726, 140595726, 227067968, 363137625, 349314212, 93054004, 388153628,
              76942273, 87180591, 97076035, 144662550, 206024627, 917665198, 1055320329}
-# Ozon FBO SKUID наших товаров в CLAUDE.md пока указаны ТОЛЬКО текстовыми именами
-# (Dental_100_klubnika, OralLubrikant) — числовых id нет, дополнить по мере появления.
-STM_OZ_PID = set()
-def is_stm(platform, idnum):
+MATRIX_SID = "1sHlFGSVB-7V8V4q6kvcTR1rrw19EaabIaOgrCHU0DHE"
+_STM_CACHE = {"wb": None, "oz": None}
+def _stm_ids_from_matrix():
+    # МАТРИЦА, столбец C: ячейки вида "Dental20 OZON\nDental20 WB\nDental20 ЯМ..." со ссылками,
+    # вшитыми В ПОДСТРОКИ (textFormatRuns), а не на всю ячейку — так же, как уже читает ym_run.py.
+    # Ссылки могут быть с доп. параметрами/хвостами — берём ЛЮБЫЕ цифры нужной длины из URL,
+    # не точное совпадение строки.
+    if _STM_CACHE["wb"] is not None: return _STM_CACHE["wb"], _STM_CACHE["oz"]
+    wb_ids, oz_ids = set(), set()
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{MATRIX_SID}"
+            f"?ranges={urllib.parse.quote('МАТРИЦА!C:C')}&fields=sheets(data(rowData(values(textFormatRuns,hyperlink))))",
+            headers={"Authorization": "Bearer " + sheets_tok()}), timeout=20)
+        data = json.loads(r.read())
+        for sh in data.get("sheets", []):
+            for blk in sh.get("data", []):
+                for row in blk.get("rowData", []):
+                    for cell in row.get("values", []):
+                        links = [cell.get("hyperlink")] if cell.get("hyperlink") else []
+                        for run in (cell.get("textFormatRuns") or []):
+                            u = ((run.get("format") or {}).get("link") or {}).get("uri")
+                            if u: links.append(u)
+                        for u in links:
+                            if not u: continue
+                            if "wildberries." in u or ".wb.ru" in u:
+                                m = re.search(r"/catalog/(\d+)", u)
+                                if m: wb_ids.add(int(m.group(1)))
+                            elif "ozon." in u:
+                                m = re.search(r"/product/[^/]*?(\d{6,})", u)
+                                if m: oz_ids.add(int(m.group(1)))
+    except Exception as e:
+        print("_stm_ids_from_matrix FAILED (использую только резервный список):", repr(e)[:200])
+    _STM_CACHE["wb"], _STM_CACHE["oz"] = wb_ids, oz_ids
+    return wb_ids, oz_ids
+def _norm_brand(s):
+    return re.sub(r"[^a-zа-я0-9]", "", (s or "").lower())
+def is_stm(platform, idnum, brand="", name=""):
+    if "асфарм" in _norm_brand(brand) or "asfarm" in _norm_brand(brand): return True
+    if "асфарм" in _norm_brand(name) or "asfarm" in _norm_brand(name): return True
     try: idnum = int(idnum)
     except Exception: return False
-    return idnum in (STM_WB_NM if platform == "WB" else STM_OZ_PID)
+    wb_ids, oz_ids = _stm_ids_from_matrix()
+    if platform == "WB": return idnum in STM_WB_NM or idnum in wb_ids
+    if platform == "OZ": return idnum in oz_ids
+    return False
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155 Safari/537.36"
 
 # ---------- Google Sheets (SA JWT) ----------
@@ -724,6 +766,13 @@ def process_one():
             data=None
         elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
+        elif not data.get("stars") and not (data.get("reviews_total") or 0):
+            # Защита от "собрал абы как" (владелец, 23.10.2026): название/цену собрать МОГЛИ,
+            # а отзывы/рейтинг — нет (антибот, занятый/сломанный браузер и т.п.). Без реальных
+            # отзывов ИИ напишет честную на вид, но ложную "жалоб не выявлено" — хуже честного
+            # отказа. Публикуем ТОЛЬКО если отзывы реально прочитаны (хоть сколько-то).
+            tg_msg(chat,"Собрал карточку, но не смог собрать отзывы/рейтинг — похоже на сбой сборщика, а не на то, что отзывов и правда нет. Не публикую, чтобы не соврать. Пришли ссылку ещё раз чуть позже.")
+            data=None
         elif not ANTHROPIC_KEY:
             tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
             an = None
@@ -765,7 +814,7 @@ def process_one():
                    "skleyka": data.get("skleyka") or [],
                    "processed_count": processed_count,
                    "processed_period": processed_period,
-                   "is_stm": is_stm(data["platform"], data.get("nm") or data.get("pid")),
+                   "is_stm": is_stm(data["platform"], data.get("nm") or data.get("pid"), data.get("brand",""), data.get("name","")),
                    **an}
             card_png(entry, "/tmp/card.png")
             update_dashboard(entry)
