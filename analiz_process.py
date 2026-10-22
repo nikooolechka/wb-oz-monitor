@@ -144,6 +144,17 @@ RECIPE_WORDS = ["рецепт", "состав", "вкус", "аромат", "ф�
 def _is_significant(count, total=None):
     return count >= MIN_COUNT
 
+def _real_count(theme_title, neg_texts):
+    """Считаем упоминания темы САМИ, не доверяя числу из ответа ИИ (он может завысить count).
+    Простое совпадение по значимым словам темы в реальном тексте жалоб."""
+    words = [w for w in re.findall(r"[а-яёa-z]{4,}", (theme_title or "").lower())]
+    if not words: return 0
+    cnt = 0
+    for t in neg_texts:
+        tl = (t or "").lower()
+        if any(w in tl for w in words): cnt += 1
+    return cnt
+
 def _recent_reviews(revs, days=30):
     """Отзывы за последние N дней (по полю даты, разные платформы кладут её по-разному)."""
     import datetime
@@ -200,16 +211,18 @@ def claude_analyze(data):
     txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
     m = re.search(r"\{.*\}", txt, re.S)
     raw = json.loads(m.group(0))
-    return _enforce_scale(raw, total)
+    return _enforce_scale(raw, total, neg)
 
-def _enforce_scale(raw, total):
+def _enforce_scale(raw, total, neg_texts=None):
     """Код, не ИИ, решает: можно ли предлагать менять рецептуру/вкус/состав под эту тему.
-    Срезает recipe-level пункты 'идеального товара', если их тема жалобы незначима по масштабу."""
+    Значимость темы считаем САМИ по реальному тексту жалоб (_real_count) — числу "count" из
+    ответа ИИ не доверяем, оно может быть завышено/придумано. Срезает recipe-level пункты
+    'идеального товара', если их тема жалобы незначима по масштабу."""
     complaints = raw.get("complaints") or []
     sig = {}
     for c in complaints:
-        cnt = int(c.get("count") or 0)
-        sig[c.get("t")] = _is_significant(cnt, total)
+        real = _real_count(c.get("t"), neg_texts or []) if neg_texts is not None else int(c.get("count") or 0)
+        sig[c.get("t")] = _is_significant(real)
     kept = []
     for item in (raw.get("ideal") or []):
         if isinstance(item, str):
