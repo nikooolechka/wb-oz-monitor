@@ -1,0 +1,28 @@
+name: analiz_process
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+concurrency:
+  group: analiz_process
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System fonts
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-dejavu-core
+      - name: Install deps
+        run: pip install -q -r requirements.txt
+      - name: Process queue
+        env:
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          ANALIZ_BOT_TOKEN: ${{ secrets.ANALIZ_BOT_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: python analiz_process.py
