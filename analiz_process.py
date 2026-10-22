@@ -580,7 +580,10 @@ def process_one():
         else:
             try:
                 an = claude_analyze(data) if ANTHROPIC_KEY else rule_analyze(data)
-            except Exception:
+            except Exception as e:
+                import traceback
+                print("claude_analyze FAILED, откат на rule_analyze:", repr(e)[:400])
+                traceback.print_exc()
                 an = rule_analyze(data)
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
