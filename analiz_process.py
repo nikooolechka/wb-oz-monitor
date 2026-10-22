@@ -24,14 +24,19 @@ STM_WB_NM = {205348527, 583154383, 583155047, 140759945, 860793985, 892991707, 7
              860789726, 140595726, 227067968, 363137625, 349314212, 93054004, 388153628,
              76942273, 87180591, 97076035, 144662550, 206024627, 917665198, 1055320329}
 MATRIX_SID = "1sHlFGSVB-7V8V4q6kvcTR1rrw19EaabIaOgrCHU0DHE"
-_STM_CACHE = {"wb": None, "oz": None}
+_STM_CACHE = {"wb": None, "oz": None, "ym": None, "dm": None}
 def _stm_ids_from_matrix():
     # МАТРИЦА, столбец C: ячейки вида "Dental20 OZON\nDental20 WB\nDental20 ЯМ..." со ссылками,
     # вшитыми В ПОДСТРОКИ (textFormatRuns), а не на всю ячейку — так же, как уже читает ym_run.py.
-    # Ссылки могут быть с доп. параметрами/хвостами — берём ЛЮБЫЕ цифры нужной длины из URL,
-    # не точное совпадение строки.
-    if _STM_CACHE["wb"] is not None: return _STM_CACHE["wb"], _STM_CACHE["oz"]
-    wb_ids, oz_ids = set(), set()
+    # Ссылки могут быть с доп. параметрами/хвостами (ЯМ особенно — cpc/do-waremd5/nid и т.д.),
+    # поэтому точные форматы (проверено живьём на реальных ссылках матрицы 23.10.2026):
+    #   WB: wildberries.ru/catalog/<nm>/...
+    #   Ozon: ozon.ru/product/<slug>-<pid>/...
+    #   ЯМ: market.yandex.ru/card/<slug>/<sku>?... — sku идёт СРАЗУ после слага, до "?"
+    #   ДМ: detmir.ru/product/index/id/<id>/
+    if _STM_CACHE["wb"] is not None:
+        return _STM_CACHE["wb"], _STM_CACHE["oz"], _STM_CACHE["ym"], _STM_CACHE["dm"]
+    wb_ids, oz_ids, ym_ids, dm_ids = set(), set(), set(), set()
     try:
         r = urllib.request.urlopen(urllib.request.Request(
             f"https://sheets.googleapis.com/v4/spreadsheets/{MATRIX_SID}"
@@ -54,10 +59,16 @@ def _stm_ids_from_matrix():
                             elif "ozon." in u:
                                 m = re.search(r"/product/[^/]*?(\d{6,})", u)
                                 if m: oz_ids.add(int(m.group(1)))
+                            elif "market.yandex." in u:
+                                m = re.search(r"/card/[^/?]+/(\d+)", u)
+                                if m: ym_ids.add(int(m.group(1)))
+                            elif "detmir." in u:
+                                m = re.search(r"/id/(\d+)", u)
+                                if m: dm_ids.add(int(m.group(1)))
     except Exception as e:
         print("_stm_ids_from_matrix FAILED (использую только резервный список):", repr(e)[:200])
-    _STM_CACHE["wb"], _STM_CACHE["oz"] = wb_ids, oz_ids
-    return wb_ids, oz_ids
+    _STM_CACHE["wb"], _STM_CACHE["oz"], _STM_CACHE["ym"], _STM_CACHE["dm"] = wb_ids, oz_ids, ym_ids, dm_ids
+    return wb_ids, oz_ids, ym_ids, dm_ids
 def _norm_brand(s):
     return re.sub(r"[^a-zа-я0-9]", "", (s or "").lower())
 def is_stm(platform, idnum, brand="", name=""):
@@ -65,9 +76,11 @@ def is_stm(platform, idnum, brand="", name=""):
     if "асфарм" in _norm_brand(name) or "asfarm" in _norm_brand(name): return True
     try: idnum = int(idnum)
     except Exception: return False
-    wb_ids, oz_ids = _stm_ids_from_matrix()
+    wb_ids, oz_ids, ym_ids, dm_ids = _stm_ids_from_matrix()
     if platform == "WB": return idnum in STM_WB_NM or idnum in wb_ids
     if platform == "OZ": return idnum in oz_ids
+    if platform == "YM": return idnum in ym_ids
+    if platform == "DM": return idnum in dm_ids
     return False
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155 Safari/537.36"
 
