@@ -178,11 +178,14 @@ def _looks_like_recipe_change(text):
     return any(w in t for w in RECIPE_WORDS)
 
 def claude_analyze(data):
-    revs = _recent_reviews(data.get("reviews") or [], 30)  # только последний месяц — свежая картина, не весь архив
+    revs = data.get("reviews") or []  # анализируем ВСЕ собранные отзывы, не только последний месяц
+    revs_month = _recent_reviews(revs, 30)  # ТОЛЬКО для порога значимости темы (10+ за месяц), не для анализа
     total = data.get("reviews_total") or len(revs) or 1
     pos = [(r.get("t") or r.get("p") or "") for r in revs if (r.get("s") in (5, 4)) and (r.get("t") or r.get("p"))][:25]
     neg = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
            for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))][:30]
+    neg_month = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
+                 for r in revs_month if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
     prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно».
 
 ВАЖНО про "count": для КАЖДОЙ темы жалобы укажи ЧЕСТНОЕ целое число — сколько раз эта тема реально встретилась в списке ЖАЛОБ ниже (это жалобы ЗА ПОСЛЕДНИЙ МЕСЯЦ, посчитай сам, не выдумывай). Это число будет проверено кодом.
@@ -212,7 +215,8 @@ def claude_analyze(data):
     txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
     m = re.search(r"\{.*\}", txt, re.S)
     raw = json.loads(m.group(0))
-    return _enforce_scale(raw, total, neg)
+    # порог значимости (10+ на тему) считаем ТОЛЬКО по жалобам за последний месяц — код, не ИИ
+    return _enforce_scale(raw, total, neg_month)
 
 def _enforce_scale(raw, total, neg_texts=None):
     """Код, не ИИ, решает: можно ли предлагать менять рецептуру/вкус/состав под эту тему.
@@ -290,18 +294,21 @@ def _plural(n):
     m=n%100; d=n%10
     return "жалоб" if (11<=m<=14 or d==0 or d>=5) else ("жалоба" if d==1 else "жалобы")
 def rule_analyze(data):
-    revs=_recent_reviews(data.get("reviews") or [], 30)  # только последний месяц
+    revs=data.get("reviews") or []  # анализ — по ВСЕМ собранным отзывам
+    revs_month=_recent_reviews(revs, 30)  # последний месяц — ТОЛЬКО для порога значимости темы
     neg=[((r.get("t") or "")+" "+(r.get("m") or "")).lower() for r in revs if r.get("s") and r.get("s")<=3]
+    neg_month=[((r.get("t") or "")+" "+(r.get("m") or "")).lower() for r in revs_month if r.get("s") and r.get("s")<=3]
     pos=[((r.get("t") or "")+" "+(r.get("p") or "")).lower() for r in revs if r.get("s") and r.get("s")>=4]
     desc=((data.get("description") or "")+" "+" ".join(str(v) for v in (data.get("characteristics") or {}).values())).lower()
-    # жалобы с числами
+    # жалобы с числами (по всему архиву — для картины), отдельно считаем за месяц (для порога recipe-гейта)
     total=data.get("reviews_total") or len(revs) or 1
-    complaints=[]; counts={}
+    complaints=[]; counts={}; counts_month={}
     for name,kws in COMPLAINT_THEMES:
         c=sum(1 for t in neg if any(k in t for k in kws))
+        cm=sum(1 for t in neg_month if any(k in t for k in kws))
         if c>0:
             complaints.append({"t":name,"n":f"{c} {_plural(c)} в собранных отзывах","_c":c})
-            counts[name]=c
+            counts[name]=c; counts_month[name]=cm
     complaints.sort(key=lambda x:-x["_c"])
     for x in complaints: x.pop("_c",None)
     # похвала
@@ -343,7 +350,7 @@ def rule_analyze(data):
     for c in complaints:
         t=c["t"]
         if t not in ideal_map: continue
-        if t in RECIPE_THEMES and not _is_significant(counts.get(t,0), total):
+        if t in RECIPE_THEMES and not _is_significant(counts_month.get(t,0)):
             continue  # единичные жалобы — не повод менять продукт
         ideal.append(ideal_map[t])
     ideal=ideal[:5]
