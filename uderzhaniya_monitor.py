@@ -190,6 +190,12 @@ def main():
     start, end = _week_window(today)
     week_key = str(start)
 
+    # Шлём итог прошедшей недели во ВТОРНИК (weekday 1). Крон гоняем ежедневно:
+    # если GitHub-крон пропустит вторник — отправим в первый же прогон до конца недели
+    # (дедуп по week_key не даст повтора). В понедельник ещё рано — ждём вторника.
+    if today.weekday() < 1 and not FORCE:
+        print("Понедельник — рано (ждём вторника).")
+        return
     if st.get("last_week") == week_key and not (DRY or FORCE):
         print(f"За неделю {week_key} дайджест уже отправлен — пропуск.")
         return
@@ -220,7 +226,7 @@ def main():
             total += s
             mark = "⚠️ " if tid in OZ_FINE_TYPES else "• "
             block.append(f"{mark}{tmap.get(tid, f'тип {tid}')}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
-        block.append(f"  <i>Ozon всего: {_fmt_rub(total)}</i>")
+        block.append(f"Ozon итого: {_fmt_rub(total)}")
         grand += total
         lines.append("\n".join(block))
 
@@ -234,16 +240,17 @@ def main():
         for reason, (c, s) in sorted(wagg.items(), key=lambda x: x[1][1]):
             total += s
             block.append(f"• {reason}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
-        block.append(f"  <i>WB всего: {_fmt_rub(total)}</i>")
+        block.append(f"WB итого: {_fmt_rub(total)}")
         grand += total
         lines.append("\n".join(block))
 
-    header = f"<b>🧾 Удержания и штрафы за неделю ({period})</b>"
+    header = f"<b>💸 Удержания и штрафы с {period}</b>"
     if lines:
         body = "\n\n".join(lines) + f"\n\n<b>Итого за неделю: {_fmt_rub(grand)}</b>"
     else:
         body = "За неделю удержаний и штрафов не было 👍"
-    footer = "" if WB_FIN_TOKEN else f"\n\n<i>WB пока не в отчёте: {wb_note}</i>"
+    # WB появится, когда будет не-read-only токен с доступом к финансам
+    footer = "" if WB_FIN_TOKEN else "\n\nWB добавлю, когда заведёшь финансовый токен (не «только чтение»)."
     msg = f"{header}\n\n{body}{footer}"
 
     print(msg)
