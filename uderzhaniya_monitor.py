@@ -144,7 +144,12 @@ def wb_collect():
         try: return abs(float(rep.get(k) or 0))
         except (TypeError, ValueError): return 0.0
     # логистику (deliveryServiceSum) НЕ берём — это не штраф/удержание
-    FIELDS = [("penaltySum", "Штрафы", True), ("deductionSum", "Удержания", False),
+    # "Удержания" (deductionSum) ИСКЛЮЧЕНЫ: это сборное поле WB, в него может попадать
+    # что угодно без расшифровки причины через API — на неделе 12-18.10 туда ушла
+    # реклама «WB Продвижение» (127 911₽), не штраф/удержание. Причину различить
+    # можно только в XLSX из кабинета (поле "Виды доставок, штрафов и корректировок ВВ"),
+    # которого в API нет. Владелец (22.10): «удержания не включать в пост».
+    FIELDS = [("penaltySum", "Штрафы", True),
               ("paidStorageSum", "Хранение", False), ("paidAcceptanceSum", "Приёмка", False),
               ("additionalPaymentSum", "Доплаты", False)]
     rows = [(label, -v, fine) for (k, label, fine) in FIELDS if (v := f(k))]
