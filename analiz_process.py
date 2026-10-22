@@ -612,17 +612,17 @@ def card_png(d, path):
             ox=nx+22; dr.text((ox,ry+14),oldn,font=_font(400,26),fill=(120,135,150))
             ow=dr.textlength(oldn,font=_font(400,26)); dr.line([(ox,ry+28),(ox+ow,ry+28)],fill=(120,135,150),width=2)
     by=py+PS+44
-    dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=24
-    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,21),fill=(46,230,200)); by+=32
-    for ln in wrap(d.get("ca",""),_font(400,26),W-2*PAD)[:2]:
-        dr.text((PAD,by),ln,font=_font(400,26),fill=(206,220,230)); by+=34
-    by+=12
-    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
+    dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=22
+    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,20),fill=(46,230,200)); by+=29
+    for ln in wrap(d.get("ca",""),_font(400,23),W-2*PAD)[:2]:
+        dr.text((PAD,by),ln,font=_font(400,23),fill=(206,220,230)); by+=30
+    by+=10
+    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,20),fill=(46,230,200)); by+=32
     for t in (d.get("seller_claims") or [])[:3]:
-        dr.ellipse([PAD+2,by+11,PAD+11,by+20],fill=(46,230,200))
-        for ln in wrap(t,_font(400,25),W-2*PAD-28)[:2]:
-            dr.text((PAD+26,by),ln,font=_font(400,25),fill=(234,242,247)); by+=33
-        by+=6
+        dr.ellipse([PAD+2,by+9,PAD+10,by+17],fill=(46,230,200))
+        for ln in wrap(t,_font(400,22),W-2*PAD-26)[:2]:
+            dr.text((PAD+24,by),ln,font=_font(400,22),fill=(234,242,247)); by+=28
+        by+=4
     by+=10; bx0,bx1=PAD,W-PAD; bh=H-40-by
     pan=Image.new("RGBA",(W,H),(0,0,0,0))
     ImageDraw.Draw(pan).rounded_rectangle([bx0,by,bx1,by+bh],24,fill=(255,255,255,12),outline=(255,255,255,26),width=1)
