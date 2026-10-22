@@ -138,25 +138,42 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 # Тема "значима" (можно предлагать менять рецептуру/вкус/материал под неё), если встретилась
 # хотя бы в MIN_SHARE доле отзывов ИЛИ хотя бы MIN_COUNT раз. Иначе — только фиксируем жалобу, но
 # в "идеальный товар" формулировки про смену рецептуры/вкуса/материала не допускаем программно.
-MIN_COUNT = 10      # жёсткий минимум: меньше 10 упоминаний темы — не повод менять продукт (владелец, 2026-10-22)
+MIN_COUNT = 10      # жёсткий минимум: меньше 10 упоминаний темы ЗА ПОСЛЕДНИЙ МЕСЯЦ — не повод менять продукт (владелец, 2026-10-22)
 RECIPE_WORDS = ["рецепт", "состав", "вкус", "аромат", "формул", "пропитк", "материал", "текстур", "плотн"]
 
 def _is_significant(count, total=None):
     return count >= MIN_COUNT
+
+def _recent_reviews(revs, days=30):
+    """Отзывы за последние N дней (по полю даты, разные платформы кладут её по-разному)."""
+    import datetime
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    out = []
+    for r in revs:
+        raw = r.get("date") or r.get("d") or ""
+        dt = None
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.datetime.strptime(str(raw)[:19], fmt); break
+            except Exception:
+                continue
+        if dt is None or dt >= cutoff:
+            out.append(r)  # нет даты — не выбрасываем (платформа могла её не отдать), считаем потенциально свежим
+    return out
 
 def _looks_like_recipe_change(text):
     t = (text or "").lower()
     return any(w in t for w in RECIPE_WORDS)
 
 def claude_analyze(data):
-    revs = data.get("reviews") or []
+    revs = _recent_reviews(data.get("reviews") or [], 30)  # только последний месяц — свежая картина, не весь архив
     total = data.get("reviews_total") or len(revs) or 1
     pos = [(r.get("t") or r.get("p") or "") for r in revs if (r.get("s") in (5, 4)) and (r.get("t") or r.get("p"))][:25]
     neg = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
            for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))][:30]
     prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно».
 
-ВАЖНО про "count": для КАЖДОЙ темы жалобы укажи ЧЕСТНОЕ целое число — сколько раз эта тема реально встретилась в списке ЖАЛОБ ниже (посчитай сам, не выдумывай). Это число будет проверено кодом.
+ВАЖНО про "count": для КАЖДОЙ темы жалобы укажи ЧЕСТНОЕ целое число — сколько раз эта тема реально встретилась в списке ЖАЛОБ ниже (это жалобы ЗА ПОСЛЕДНИЙ МЕСЯЦ, посчитай сам, не выдумывай). Это число будет проверено кодом.
 Для "ideal" — у каждого пункта укажи "scope": "recipe" (если это предложение изменить состав/рецептуру/вкус/материал/текстуру товара) или "fix" (если это упаковка/инфографика/позиционирование/контроль качества — без изменения самого продукта), и "based_on" — список тем жалоб (t), на которых основан этот пункт (пустой список, если это общая рекомендация).
 
 ТОВАР: {data.get('name')}
@@ -248,7 +265,7 @@ def _plural(n):
     m=n%100; d=n%10
     return "жалоб" if (11<=m<=14 or d==0 or d>=5) else ("жалоба" if d==1 else "жалобы")
 def rule_analyze(data):
-    revs=data.get("reviews") or []
+    revs=_recent_reviews(data.get("reviews") or [], 30)  # только последний месяц
     neg=[((r.get("t") or "")+" "+(r.get("m") or "")).lower() for r in revs if r.get("s") and r.get("s")<=3]
     pos=[((r.get("t") or "")+" "+(r.get("p") or "")).lower() for r in revs if r.get("s") and r.get("s")>=4]
     desc=((data.get("description") or "")+" "+" ".join(str(v) for v in (data.get("characteristics") or {}).values())).lower()
