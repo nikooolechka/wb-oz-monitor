@@ -482,22 +482,31 @@ def update_dashboard(entry):
 
 # ---------- Пост в бот ----------
 def post_card(chat, entry, img_path):
-    import uuid
-    price = (f"цена {int(entry['price']):,}".replace(","," ")+" ₽, ") if entry.get("price") else ""
-    rat = (f"рейтинг {entry['rating']}" if entry.get("rating") else "")
-    cap=(f"<b>Проанализировал ✅</b>\n"
-         f'<a href="{entry["url"]}">{entry["name"]}</a> ({entry["platform"]}) — {price}{rat}\n'
-         f"{(entry.get('reviews_total') or 0):,}".replace(","," ")+" отзывов")
-    kb=json.dumps({"inline_keyboard":[[{"text":"Полный разбор","url":"https://nikooolechka.github.io/analiz.html"}]]})
-    b="----b"+uuid.uuid4().hex; data=open(img_path,"rb").read()
-    def fld(n,v): return (f'--{b}\r\nContent-Disposition: form-data; name="{n}"\r\n\r\n{v}\r\n').encode()
-    body=fld("chat_id",chat)+fld("caption",cap)+fld("parse_mode","HTML")+fld("reply_markup",kb)
-    body+=(f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="c.png"\r\nContent-Type: image/png\r\n\r\n').encode()+data+b"\r\n"+(f'--{b}--\r\n').encode()
-    urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{BOT}/sendPhoto",data=body,
-        headers={"Content-Type":f"multipart/form-data; boundary={b}"}),timeout=60)
+    # Сбой отправки в Telegram НЕ должен ронять весь прогон (иначе очередь не очистится,
+    # следующие товары встанут). Логируем и идём дальше — дашборд уже обновлён к этому моменту.
+    try:
+        import uuid
+        price = (f"цена {int(entry['price']):,}".replace(","," ")+" ₽, ") if entry.get("price") else ""
+        rat = (f"рейтинг {entry['rating']}" if entry.get("rating") else "")
+        cap=(f"<b>Проанализировал ✅</b>\n"
+             f'<a href="{entry["url"]}">{entry["name"]}</a> ({entry["platform"]}) — {price}{rat}\n'
+             f"{(entry.get('reviews_total') or 0):,}".replace(","," ")+" отзывов")
+        kb=json.dumps({"inline_keyboard":[[{"text":"Полный разбор","url":"https://nikooolechka.github.io/analiz.html"}]]})
+        b="----b"+uuid.uuid4().hex; data=open(img_path,"rb").read()
+        def fld(n,v): return (f'--{b}\r\nContent-Disposition: form-data; name="{n}"\r\n\r\n{v}\r\n').encode()
+        body=fld("chat_id",chat)+fld("caption",cap)+fld("parse_mode","HTML")+fld("reply_markup",kb)
+        body+=(f'--{b}\r\nContent-Disposition: form-data; name="photo"; filename="c.png"\r\nContent-Type: image/png\r\n\r\n').encode()+data+b"\r\n"+(f'--{b}--\r\n').encode()
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{BOT}/sendPhoto",data=body,
+            headers={"Content-Type":f"multipart/form-data; boundary={b}"}),timeout=60)
+    except Exception as e:
+        print("post_card FAILED (не роняем прогон):", repr(e)[:300])
+
 def tg_msg(chat,text):
-    urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{BOT}/sendMessage",
-        data=urllib.parse.urlencode({"chat_id":chat,"text":text}).encode()))
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{BOT}/sendMessage",
+            data=urllib.parse.urlencode({"chat_id":chat,"text":text}).encode()), timeout=30)
+    except Exception as e:
+        print("tg_msg FAILED (не роняем прогон):", repr(e)[:300])
 
 # ---------- Главный разбор очереди ----------
 def today():
