@@ -86,19 +86,31 @@ def wb_collect(nm):
          "name":cj.get("imt_name") or "","brand":(cj.get("selling") or {}).get("brand_name") or "",
          "description":cj.get("description","") or "","sostav":opts.get("Состав") or opts.get("Состав/материал") or "",
          "characteristics":opts,"photo":f"{base}/images/big/1.webp"}
-    reviews=[]; raw=[]
+    reviews=[]; raw=[]; sibling_nms=[]
     for host in ("feedbacks1","feedbacks2"):
         try:
             fb=json.loads(get(f"https://{host}.wb.ru/feedbacks/v2/{imt}")); raw=fb.get("feedbacks") or []
             out["skleyka_count"]=fb.get("feedbackCount")
             for e in (fb.get("nmValuationDistribution") or []):
-                if e.get("nm")==nm:
+                enm=e.get("nm")
+                if enm and enm!=nm: sibling_nms.append(enm)
+                if enm==nm:
                     vd={int(k):v for k,v in (e.get("valuationDistribution") or {}).items()}
                     out["stars"]={str(k):vd.get(k,0) for k in (5,4,3,2,1)}
                     out["reviews_total"]=sum(vd.values())
                     out["rating"]=round(sum(k*v for k,v in vd.items())/max(1,sum(vd.values())),1)
             if raw: break
         except Exception: pass
+    # другие товары в этой склейке — реальные названия (не просто счётчик), ограничено 6 штук для скорости
+    skleyka_names=[]
+    for sn in sibling_nms[:6]:
+        try:
+            svol=sn//100000; spart=sn//1000; sh=basket_host(svol)
+            scj=json.loads(get(f"https://basket-{sh}.wbbasket.ru/vol{svol}/part{spart}/{sn}/info/ru/card.json"))
+            sname=scj.get("imt_name") or scj.get("subj_name")
+            if sname: skleyka_names.append(sname)
+        except Exception: continue
+    out["skleyka"]=skleyka_names
     for f in raw:
         if f.get("nmId")!=nm: continue
         reviews.append({"s":f.get("productValuation"),"t":f.get("text","") or "","p":f.get("pros","") or "","m":f.get("cons","") or "","date":f.get("createdDate","")})
