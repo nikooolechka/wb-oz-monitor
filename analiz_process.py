@@ -15,6 +15,18 @@ PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3
 BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
 GH_PAT = os.environ["GH_PAT"]
+
+# Наши собственные товары (СТМ АС-Фарм) — WB SKU из CLAUDE.md "Список активных товаров".
+STM_WB_NM = {205348527, 583154383, 583155047, 140759945, 860793985, 892991707, 76952248,
+             860789726, 140595726, 227067968, 363137625, 349314212, 93054004, 388153628,
+             76942273, 87180591, 97076035, 144662550, 206024627, 917665198, 1055320329}
+# Ozon FBO SKUID наших товаров в CLAUDE.md пока указаны ТОЛЬКО текстовыми именами
+# (Dental_100_klubnika, OralLubrikant) — числовых id нет, дополнить по мере появления.
+STM_OZ_PID = set()
+def is_stm(platform, idnum):
+    try: idnum = int(idnum)
+    except Exception: return False
+    return idnum in (STM_WB_NM if platform == "WB" else STM_OZ_PID)
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155 Safari/537.36"
 
 # ---------- Google Sheets (SA JWT) ----------
@@ -258,6 +270,17 @@ def _looks_like_recipe_change(text):
     t = (text or "").lower()
     return any(w in t for w in RECIPE_WORDS)
 
+def _existing_categories():
+    # Список уже использованных категорий дашборда — чтобы ИИ переиспользовал подходящую,
+    # а не плодил почти-дубли ("Детские денталы" / "Дентал-салфетки для детей" и т.п.).
+    try:
+        raw = get("https://raw.githubusercontent.com/" + DASH_REPO + "/main/docs/analiz_data.json", t=15)
+        cur = json.loads(raw)
+        cats = sorted({p.get("category") for p in cur.get("products", []) if p.get("category")})
+        return cats
+    except Exception:
+        return []
+
 def claude_analyze(data):
     revs = data.get("reviews") or []  # анализируем ВСЕ собранные отзывы, не только последний месяц
     revs_month = _recent_reviews(revs, 30)  # ТОЛЬКО для порога значимости темы (10+ за месяц), не для анализа
@@ -280,8 +303,12 @@ def claude_analyze(data):
 ПОХВАЛА ИЗ ОТЗЫВОВ: {json.dumps(pos, ensure_ascii=False)}
 ЖАЛОБЫ ИЗ ОТЗЫВОВ ({len(neg)} шт): {json.dumps(neg, ensure_ascii=False)}
 
+УЖЕ ИСПОЛЬЗУЕМЫЕ НА ДАШБОРДЕ КАТЕГОРИИ: {json.dumps(_existing_categories(), ensure_ascii=False)}
+Для поля "category" — если товар подходит под одну из них, используй ЕЁ ДОСЛОВНО (не создавай почти-дубль с другой формулировкой). Если не подходит ни одна — придумай новую короткую категорию в том же стиле (2-4 слова, по-русски, тип товара как его понял бы покупатель — напр. "Интимная гигиена", "Детские денталы", "Жидкость для ирригатора", "Подгузники").
+
 Верни СТРОГО валидный JSON, без markdown-обрамления, по схеме:
 {{"ca":"кто покупает и зачем, 1-2 предложения",
+"category":"короткая категория товара, 2-4 слова",
 "seller_claims":["что продавец обещает в карточке, 4-6 пунктов"],
 "praise":[{{"t":"тема простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
@@ -737,6 +764,7 @@ def process_one():
                    "skleyka": data.get("skleyka") or [],
                    "processed_count": processed_count,
                    "processed_period": processed_period,
+                   "is_stm": is_stm(data["platform"], data.get("nm") or data.get("pid")),
                    **an}
             card_png(entry, "/tmp/card.png")
             update_dashboard(entry)
