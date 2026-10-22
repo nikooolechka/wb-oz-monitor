@@ -274,7 +274,7 @@ def _enforce_scale(raw, total, neg_month_texts, neg_all_texts, pos_texts=None):
             praise_out.append(p); continue  # старый формат без t/desc — не ломаем
         t = p.get("t") or ""; desc = (p.get("desc") or "").strip()
         cnt = _real_count(t, pos_texts or []) if pos_texts is not None else 0
-        line = (f"{cnt} {_plural(cnt)}" if cnt >= 2 else "").strip()
+        line = (f"{cnt} {_plural(cnt, 'отзыв')}" if cnt >= 2 else "").strip()
         text = f"{t}" + (f" — {desc}" if desc else "")
         praise_out.append(f"{text} ({line})" if line else text)
     raw["praise"] = praise_out
@@ -354,9 +354,11 @@ CLAIM_KEYWORDS = [
     ("Удобно брать с собой", ["дорог","прогулк","поездк","с собой","гермет","индивидуальн"]),
     ("Безопасность / сертификат (СГР)", ["гипоаллерг","безопас","сгр","сертификат","натурал"]),
 ]
-def _plural(n):
+def _plural(n, word="жалоб"):
+    forms = {"жалоб": ("жалоб", "жалоба", "жалобы"), "отзыв": ("отзывов", "отзыв", "отзыва")}
+    many, one, few = forms.get(word, forms["жалоб"])
     m=n%100; d=n%10
-    return "жалоб" if (11<=m<=14 or d==0 or d>=5) else ("жалоба" if d==1 else "жалобы")
+    return many if (11<=m<=14 or d==0 or d>=5) else (one if d==1 else few)
 def rule_analyze(data):
     revs=data.get("reviews") or []  # анализ — по ВСЕМ собранным отзывам
     revs_month=_recent_reviews(revs, 30)  # последний месяц — ТОЛЬКО для порога значимости темы
