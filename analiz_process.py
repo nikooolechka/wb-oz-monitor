@@ -134,29 +134,47 @@ def oz_collect(pid, timeout=420):
 
 # ---------- Анализ — Claude (Anthropic API, ключ владельца, $100/мес бесплатных кредитов) ----------
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
+# Порог значимости темы — считается КОДОМ, не зависит от того, послушался ли ИИ инструкции в тексте промпта.
+# Тема "значима" (можно предлагать менять рецептуру/вкус/материал под неё), если встретилась
+# хотя бы в MIN_SHARE доле отзывов ИЛИ хотя бы MIN_COUNT раз. Иначе — только фиксируем жалобу, но
+# в "идеальный товар" формулировки про смену рецептуры/вкуса/материала не допускаем программно.
+MIN_COUNT = 10      # жёсткий минимум: меньше 10 упоминаний темы — не повод менять продукт (владелец, 2026-10-22)
+RECIPE_WORDS = ["рецепт", "состав", "вкус", "аромат", "формул", "пропитк", "материал", "текстур", "плотн"]
+
+def _is_significant(count, total=None):
+    return count >= MIN_COUNT
+
+def _looks_like_recipe_change(text):
+    t = (text or "").lower()
+    return any(w in t for w in RECIPE_WORDS)
+
 def claude_analyze(data):
     revs = data.get("reviews") or []
+    total = data.get("reviews_total") or len(revs) or 1
     pos = [(r.get("t") or r.get("p") or "") for r in revs if (r.get("s") in (5, 4)) and (r.get("t") or r.get("p"))][:25]
     neg = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
            for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))][:30]
-    prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно». Числа жалоб — реальные, из списка ниже. Учитывай масштаб: если недовольных единицы на тысячи отзывов — НЕ предлагай менять рецептуру/продукт, предлагай точечные правки (инфографика, фасовка и т.п.).
+    prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно».
+
+ВАЖНО про "count": для КАЖДОЙ темы жалобы укажи ЧЕСТНОЕ целое число — сколько раз эта тема реально встретилась в списке ЖАЛОБ ниже (посчитай сам, не выдумывай). Это число будет проверено кодом.
+Для "ideal" — у каждого пункта укажи "scope": "recipe" (если это предложение изменить состав/рецептуру/вкус/материал/текстуру товара) или "fix" (если это упаковка/инфографика/позиционирование/контроль качества — без изменения самого продукта), и "based_on" — список тем жалоб (t), на которых основан этот пункт (пустой список, если это общая рекомендация).
 
 ТОВАР: {data.get('name')}
 ПЛОЩАДКА: {data.get('platform')}
-РЕЙТИНГ: {data.get('rating')} | ВСЕГО ОТЗЫВОВ: {data.get('reviews_total')}
+РЕЙТИНГ: {data.get('rating')} | ВСЕГО ОТЗЫВОВ: {total}
 СОСТАВ: {data.get('sostav')}
 ОПИСАНИЕ ПРОДАВЦА: {(data.get('description') or '')[:1500]}
 ПОХВАЛА ИЗ ОТЗЫВОВ: {json.dumps(pos, ensure_ascii=False)}
-ЖАЛОБЫ ИЗ ОТЗЫВОВ: {json.dumps(neg, ensure_ascii=False)}
+ЖАЛОБЫ ИЗ ОТЗЫВОВ ({len(neg)} шт, пронумерованы для подсчёта): {json.dumps(neg, ensure_ascii=False)}
 
 Верни СТРОГО валидный JSON, без markdown-обрамления, по схеме:
 {{"ca":"кто покупает и зачем, 1-2 предложения",
 "seller_claims":["что продавец обещает в карточке, 4-6 пунктов"],
 "praise":["за что хвалят в отзывах, 3-5 пунктов"],
-"complaints":[{{"t":"тема жалобы простыми словами","n":"сколько раз встречается / суть, по-русски"}}],
+"complaints":[{{"t":"тема жалобы простыми словами","n":"человеческое пояснение сути","count":0}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
-"ideal":["каким стоило бы сделать товар — пропорционально масштабу жалоб, 4-6 пунктов"]}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 2000,
+"ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
+    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 2200,
                         "messages": [{"role": "user", "content": prompt}]}).encode()
     r = get("https://api.anthropic.com/v1/messages",
             hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
@@ -164,7 +182,37 @@ def claude_analyze(data):
     txt = json.loads(r)["content"][0]["text"]
     txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
     m = re.search(r"\{.*\}", txt, re.S)
-    return json.loads(m.group(0))
+    raw = json.loads(m.group(0))
+    return _enforce_scale(raw, total)
+
+def _enforce_scale(raw, total):
+    """Код, не ИИ, решает: можно ли предлагать менять рецептуру/вкус/состав под эту тему.
+    Срезает recipe-level пункты 'идеального товара', если их тема жалобы незначима по масштабу."""
+    complaints = raw.get("complaints") or []
+    sig = {}
+    for c in complaints:
+        cnt = int(c.get("count") or 0)
+        sig[c.get("t")] = _is_significant(cnt, total)
+    kept = []
+    for item in (raw.get("ideal") or []):
+        if isinstance(item, str):
+            # старый формат без scope — пропускаем как есть, но если похоже на смену рецептуры
+            # без привязки к конкретной значимой теме, на всякий случай не блокируем (нет данных для проверки)
+            kept.append(item); continue
+        text = item.get("text") or ""
+        scope = item.get("scope") or ("recipe" if _looks_like_recipe_change(text) else "fix")
+        based_on = item.get("based_on") or []
+        if scope == "recipe":
+            # разрешаем смену рецептуры/вкуса/материала ТОЛЬКО если хотя бы одна тема-основание значима
+            if not based_on or not any(sig.get(t) for t in based_on):
+                continue  # единичные жалобы — не повод менять продукт, вырезаем пункт
+        kept.append(text)
+    if not kept:
+        kept = ["Товар в целом принимают хорошо — менять состав/рецептуру нет оснований; усилить подачу сильных сторон в карточке."]
+    raw["ideal"] = kept
+    for c in complaints:
+        c.pop("count", None)  # во фронт не нужно, только для проверки
+    return raw
 
 # ---------- Анализ СВОИМ кодом (правила) — запасной вариант, если ключ недоступен ----------
 # Темы жалоб/похвал для ниши гигиены полости рта (салфетки/спреи/паста/ирригатор).
@@ -205,10 +253,13 @@ def rule_analyze(data):
     pos=[((r.get("t") or "")+" "+(r.get("p") or "")).lower() for r in revs if r.get("s") and r.get("s")>=4]
     desc=((data.get("description") or "")+" "+" ".join(str(v) for v in (data.get("characteristics") or {}).values())).lower()
     # жалобы с числами
-    complaints=[]
+    total=data.get("reviews_total") or len(revs) or 1
+    complaints=[]; counts={}
     for name,kws in COMPLAINT_THEMES:
         c=sum(1 for t in neg if any(k in t for k in kws))
-        if c>0: complaints.append({"t":name,"n":f"{c} {_plural(c)} в собранных отзывах","_c":c})
+        if c>0:
+            complaints.append({"t":name,"n":f"{c} {_plural(c)} в собранных отзывах","_c":c})
+            counts[name]=c
     complaints.sort(key=lambda x:-x["_c"])
     for x in complaints: x.pop("_c",None)
     # похвала
@@ -243,8 +294,18 @@ def rule_analyze(data):
         "Дорого за количество/качество":"Либо подтянуть качество под цену, либо честно показать ценность (состав, эффект) — снять ощущение переплаты.",
         "Отбеливание не работает":"Не обещать видимое отбеливание, если эффекта нет — заменить на «снятие налёта + свежесть».",
     }
-    ideal=[ideal_map[c["t"]] for c in complaints if c["t"] in ideal_map][:5]
-    if not ideal: ideal=["Товар в целом принимают хорошо — радикально менять нечего; усилить подачу сильных сторон в инфографике."]
+    # recipe-level темы (меняют сам продукт — вкус/состав/материал) допускаем в "идеальном товаре"
+    # ТОЛЬКО если тема значима по масштабу (та же проверка, что у Claude-пути, _is_significant)
+    RECIPE_THEMES={"Салфетки сухие / мало пропитаны","Тонкие / легко рвутся / нет текстуры","Вкус не подошёл ребёнку (горечь, отказ)"}
+    ideal=[]
+    for c in complaints:
+        t=c["t"]
+        if t not in ideal_map: continue
+        if t in RECIPE_THEMES and not _is_significant(counts.get(t,0), total):
+            continue  # единичные жалобы — не повод менять продукт
+        ideal.append(ideal_map[t])
+    ideal=ideal[:5]
+    if not ideal: ideal=["Товар в целом принимают хорошо — менять состав/рецептуру нет оснований; усилить подачу сильных сторон в инфографике."]
     # ЦА
     kid = any(k in desc for k in ["0+","дет","малыш","молочн","прорезыван"])
     ca=("Родители маленьких детей — уход за первыми зубами, прорезывание, гигиена в дороге." if kid
