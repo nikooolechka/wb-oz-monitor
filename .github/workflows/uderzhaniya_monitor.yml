@@ -2,11 +2,14 @@ name: Монитор удержаний и штрафов (Ozon + WB → кан�
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # ежедневно, 9:00 МСК (GitHub-крон дрейфит — дедуп по state)
+    - cron: "0 7 * * 2"   # вторник ~10:00 МСК; недельный итог за пн–пн (дедуп недели в state)
   workflow_dispatch:
     inputs:
       dry:
         description: "1 = только лог, без отправки и без записи state"
+        default: ""
+      force:
+        description: "1 = игнорировать дедуп недели (отправить вручную)"
         default: ""
 
 permissions:
@@ -35,6 +38,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           STATE_PATH: data/uderzhaniya_state.json
           DRY: ${{ github.event.inputs.dry }}
+          FORCE: ${{ github.event.inputs.force }}
         run: python uderzhaniya_monitor.py
       - name: Сохранить состояние обратно
         run: |

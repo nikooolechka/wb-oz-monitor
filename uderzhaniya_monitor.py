@@ -43,8 +43,8 @@ WB_FIN_TOKEN = os.environ.get("WB_FIN_TOKEN", "").strip()
 WB_FIN_BASE = "https://finance-api.wildberries.ru"
 
 STATE_PATH = os.environ.get("STATE_PATH", "data/uderzhaniya_state.json")
-LOOKBACK_DAYS = int(os.environ.get("LOOKBACK_DAYS", "4"))   # Ozon начисления идут с лагом
 DRY = os.environ.get("DRY") == "1"
+FORCE = os.environ.get("FORCE") == "1"   # игнорировать дедуп недели (для ручного прогона)
 CTX = ssl._create_unverified_context()
 
 # Рекламные/маркетинговые типы NON_ITEM — у рекламы свой контроль (ДРР),
@@ -102,11 +102,10 @@ def _amount(block) -> float:
         return 0.0
 
 
-def oz_collect(days: int):
-    """Вернуть {accrual_id: (type_id, amount, date)} по NON_ITEM за последние `days`."""
+def oz_collect(days_list):
+    """Вернуть {accrual_id: (type_id, amount, date)} по NON_ITEM за дни из days_list."""
     out = {}
-    for dd in range(1, days + 1):
-        day = (date.today() - timedelta(days=dd)).strftime("%Y-%m-%d")
+    for day in days_list:
         last_id = None
         while True:
             body = {"date": day}
@@ -127,13 +126,12 @@ def oz_collect(days: int):
     return out
 
 
-def wb_collect():
-    """WB удержания из нового finance API. Нужен токен категории «Финансы».
-    Возвращает (rows, note): rows = [(line_id, reason, amount, date)], либо [] + причина."""
+def wb_collect(dfr, dto):
+    """WB удержания из нового finance API за период [dfr, dto]. Нужен не-read-only
+    токен с категорией «Финансы». Возвращает (rows, note):
+    rows = [(line_id, reason, amount, date)], либо [] + причина."""
     if not WB_FIN_TOKEN:
-        return [], "нет токена (нужен WB_FIN_TOKEN категории «Финансы»)"
-    dto = date.today()
-    dfr = dto - timedelta(days=14)
+        return [], "нет токена (нужен WB_FIN_TOKEN, не read-only, категория «Финансы»)"
     head = {"Authorization": WB_FIN_TOKEN, "Content-Type": "application/json"}
 
     def post(path, body):
@@ -186,87 +184,81 @@ def _save_state(st: dict):
         json.dump(st, f, ensure_ascii=False, indent=2)
 
 
+def _week_window(today: date):
+    """Окно пн–пн: [понедельник прошлой недели, понедельник этой недели).
+    Запуск по вторникам → отчёт за ПОЛНУЮ прошедшую неделю (7 дней, пн..вс)."""
+    this_mon = today - timedelta(days=today.weekday())   # понедельник текущей недели
+    start = this_mon - timedelta(days=7)                 # понедельник прошлой недели
+    end = this_mon                                       # исключительно
+    return start, end
+
+
 def main():
     st = _load_state()
-    baseline_done = st.get("baseline_done", False)
-    oz_seen = st.get("oz_seen", {})          # {accrual_id(str): date}
-    wb_seen = set(st.get("wb_seen", []))
+    today = date.today()
+    start, end = _week_window(today)
+    week_key = str(start)
 
-    tmap = oz_types()
-    oz_now = oz_collect(LOOKBACK_DAYS)
-
-    # новые Ozon-удержания (не виденные раньше, не реклама)
-    new_oz = {}
-    for aid, (tid, amt, dt) in oz_now.items():
-        if str(aid) in oz_seen:
-            continue
-        if tid in OZ_EXCLUDE_TYPES:
-            oz_seen[str(aid)] = dt    # помечаем виденным, но не репортим
-            continue
-        new_oz[aid] = (tid, amt, dt)
-        oz_seen[str(aid)] = dt
-
-    # WB
-    wb_rows, wb_note = wb_collect()
-    new_wb = [(lid, reason, amt, dt) for (lid, reason, amt, dt) in wb_rows if lid not in wb_seen]
-    for lid, *_ in new_wb:
-        wb_seen.add(lid)
-
-    # prune oz_seen старше 21 дня (ограничить рост файла состояния)
-    cutoff = (date.today() - timedelta(days=21)).strftime("%Y-%m-%d")
-    oz_seen = {k: v for k, v in oz_seen.items() if (v or "9999") >= cutoff}
-
-    # первый прогон — тихая база, не спамим историей
-    if not baseline_done:
-        st.update(baseline_done=True, oz_seen=oz_seen, wb_seen=sorted(wb_seen),
-                  wb_note=wb_note)
-        if not DRY:
-            _save_state(st)
-        print(f"[baseline] Ozon NON_ITEM виденных: {len(oz_seen)}; WB: {wb_note or len(wb_seen)}. Алерт не шлём.")
+    if st.get("last_week") == week_key and not (DRY or FORCE):
+        print(f"За неделю {week_key} дайджест уже отправлен — пропуск.")
         return
 
-    # агрегат Ozon по типам
+    days = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range((end - start).days)]
+    period = f"{start:%d.%m}–{(end - timedelta(days=1)):%d.%m}"
+
+    tmap = oz_types()
+    oz_now = oz_collect(days)
+
+    # Ozon: агрегат NON_ITEM за неделю (реклама исключена)
+    agg = {}
+    for _, (tid, amt, _dt) in oz_now.items():
+        if tid in OZ_EXCLUDE_TYPES:
+            continue
+        c, s = agg.get(tid, (0, 0.0))
+        agg[tid] = (c + 1, s + amt)
+
+    # WB за ту же неделю
+    wb_rows, wb_note = wb_collect(start, end - timedelta(days=1))
+
     lines = []
-    if new_oz:
-        agg = {}
-        for _, (tid, amt, _dt) in new_oz.items():
-            c, s = agg.get(tid, (0, 0.0))
-            agg[tid] = (c + 1, s + amt)
-        block = ["<b>🧾 Новые удержания Ozon</b>"]
+    grand = 0.0
+    if agg:
+        block = ["<b>Ozon:</b>"]
         total = 0.0
         for tid, (c, s) in sorted(agg.items(), key=lambda x: x[1][1]):
             total += s
             mark = "⚠️ " if tid in OZ_FINE_TYPES else "• "
-            name = tmap.get(tid, f"тип {tid}")
-            block.append(f"{mark}{name}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
-        block.append(f"Итого за период: {_fmt_rub(total)}")
+            block.append(f"{mark}{tmap.get(tid, f'тип {tid}')}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
+        block.append(f"  <i>Ozon всего: {_fmt_rub(total)}</i>")
+        grand += total
         lines.append("\n".join(block))
 
-    # WB
-    if new_wb:
+    if wb_rows:
         wagg = {}
-        for _, reason, amt, _dt in new_wb:
+        for _, reason, amt, _dt in wb_rows:
             c, s = wagg.get(reason, (0, 0.0))
             wagg[reason] = (c + 1, s + amt)
-        block = ["<b>🧾 Новые удержания WB</b>"]
+        block = ["<b>WB:</b>"]
         total = 0.0
         for reason, (c, s) in sorted(wagg.items(), key=lambda x: x[1][1]):
             total += s
             block.append(f"• {reason}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
-        block.append(f"Итого: {_fmt_rub(total)}")
+        block.append(f"  <i>WB всего: {_fmt_rub(total)}</i>")
+        grand += total
         lines.append("\n".join(block))
 
-    st.update(baseline_done=True, oz_seen=oz_seen, wb_seen=sorted(wb_seen), wb_note=wb_note)
-
+    header = f"<b>🧾 Удержания и штрафы за неделю ({period})</b>"
     if lines:
-        msg = "\n\n".join(lines)
-        print(msg)
-        if not DRY:
-            notify.send(msg)
+        body = "\n\n".join(lines) + f"\n\n<b>Итого за неделю: {_fmt_rub(grand)}</b>"
     else:
-        print(f"Новых удержаний нет. Ozon ok; WB: {wb_note or 'ok'}")
+        body = "За неделю удержаний и штрафов не было 👍"
+    footer = "" if WB_FIN_TOKEN else f"\n\n<i>WB пока не в отчёте: {wb_note}</i>"
+    msg = f"{header}\n\n{body}{footer}"
 
+    print(msg)
     if not DRY:
+        notify.send(msg)
+        st.update(last_week=week_key, wb_note=wb_note)
         _save_state(st)
 
 
