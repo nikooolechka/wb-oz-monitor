@@ -11,7 +11,7 @@ from collections import Counter
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 PULT = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"
 QUEUE_CELL = "Лист1!M1"; BUSY_CELL = "Лист1!M2"
-PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3"
+PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3"; PRICE_HB = "Лист1!A4"
 BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
 GH_PAT = os.environ["GH_PAT"]
@@ -121,7 +121,32 @@ def wb_collect(nm):
     return out
 
 # ---------- Ozon сбор (через ПК по пульту) ----------
+def _pc_heartbeat_fresh(max_age_sec=600):
+    """ПК-агент пишет heartbeat 'alive YYYY-MM-DD HH:MM:SS' в A4 каждые ~120с.
+    Свежий heartbeat = сессия ПК жива и слушает команды."""
+    import datetime
+    hb = sread(PRICE_HB)
+    m = re.search(r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})", hb or "")
+    if not m: return False
+    try:
+        t = datetime.datetime.strptime(m.group(1)+" "+m.group(2), "%Y-%m-%d %H:%M:%S")
+        t = t.replace(tzinfo=datetime.timezone(datetime.timedelta(hours=3)))  # МСК
+        now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
+        return (now - t).total_seconds() < max_age_sec
+    except Exception: return False
+
 def oz_collect(pid, timeout=420):
+    # Если ПК сейчас не отвечает (сессия упала) — не кидаем команду вхолостую, а ждём до 5 минут
+    # восстановления (его поднимает отдельный механизм на маке, не эта автоматизация). Если за это
+    # время не ожил — честно возвращаем сигнал "ПК недоступен", а не тихо "не нашёл товар".
+    if not _pc_heartbeat_fresh():
+        wait_start = time.time()
+        while time.time() - wait_start < 300:
+            time.sleep(20)
+            if _pc_heartbeat_fresh(): break
+        else:
+            return {"_pc_down": True}
+
     swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
            "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/oz_card_pc.py' -OutFile \"$d\\oz_card_pc.py\";"
            f"& $py \"$d\\oz_card_pc.py\" {pid} 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
@@ -605,6 +630,7 @@ def process_one():
     swrite(BUSY_CELL,"1 "+today())
     line=lines[0]; parts=line.split("|")
     msgid=parts[0]; chat=parts[1]; url=parts[2]; who=parts[3] if len(parts)>3 else ""
+    an=None
     try:
         if re.search(r"ozon\.", url):
             m=re.search(r"/product/[^/]*?(\d{6,})", url) or re.search(r"(\d{6,})", url)
@@ -614,7 +640,10 @@ def process_one():
             data=wb_collect(m.group(1)) if m else None
         else:
             data=None
-        if not data:
+        if data and data.get("_pc_down"):
+            tg_msg(chat,"Удалённый ПК сейчас недоступен (нужен для сбора с Ozon) — попробуй прислать ссылку чуть позже.")
+            data=None
+        elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
         elif not ANTHROPIC_KEY:
             tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
