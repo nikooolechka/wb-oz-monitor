@@ -217,13 +217,27 @@ def claude_analyze(data):
 "ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
     body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 3000,
                         "messages": [{"role": "user", "content": prompt}]}).encode()
-    r = get("https://api.anthropic.com/v1/messages",
-            hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            data=body, t=90)
-    txt = json.loads(r)["content"][0]["text"]
-    txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
-    m = re.search(r"\{.*\}", txt, re.S)
-    raw = json.loads(m.group(0))
+    # Ретраи: ИИ — ЕДИНСТВЕННЫЙ источник выводов (универсальный для любого товара, не только нашей ниши).
+    # Если сбойнуло один раз (сеть/лимит) — пробуем ещё, вместо того чтобы тихо откатываться на
+    # фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП" недопустимы для любого товара).
+    last_err = None
+    ATTEMPTS = 10
+    for attempt in range(ATTEMPTS):
+        try:
+            r = get("https://api.anthropic.com/v1/messages",
+                    hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                    data=body, t=90)
+            txt = json.loads(r)["content"][0]["text"]
+            txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
+            m = re.search(r"\{.*\}", txt, re.S)
+            raw = json.loads(m.group(0))
+            break
+        except Exception as e:
+            last_err = e
+            print(f"claude_analyze попытка {attempt+1}/{ATTEMPTS} провалилась: {repr(e)[:200]}")
+            if attempt < ATTEMPTS - 1: time.sleep(10)
+    else:
+        raise RuntimeError(f"claude_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
     # Значимость темы (10+ за месяц) считаем ТОЛЬКО кодом. Полный текст жалоб/похвал (вся история)
     # идёт на подсчёт реального числа для КАЖДОЙ темы — она всегда попадает в вывод явным числом.
     return _enforce_scale(raw, total, neg_month, neg, pos)
