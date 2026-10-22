@@ -101,7 +101,7 @@ def wb_collect(nm):
         except Exception: pass
     for f in raw:
         if f.get("nmId")!=nm: continue
-        reviews.append({"s":f.get("productValuation"),"t":f.get("text","") or "","p":f.get("pros","") or "","m":f.get("cons","") or ""})
+        reviews.append({"s":f.get("productValuation"),"t":f.get("text","") or "","p":f.get("pros","") or "","m":f.get("cons","") or "","date":f.get("createdDate","")})
     out["reviews"]=reviews
     if "reviews_total" not in out:
         out["reviews_total"]=len(reviews); out["rating"]=None
