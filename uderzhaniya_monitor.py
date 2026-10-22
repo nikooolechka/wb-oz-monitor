@@ -117,44 +117,39 @@ def oz_collect(days_list):
     return out
 
 
-def wb_collect(dfr, dto):
-    """WB удержания из нового finance API за период [dfr, dto]. Нужен не-read-only
-    токен с категорией «Финансы». Возвращает (rows, note):
-    rows = [(line_id, reason, amount, date)], либо [] + причина."""
+def wb_collect():
+    """WB удержания/штрафы из нового finance API (read-only токен категории «Финансы»,
+    тип acc:3/for:self — WB_FIN_TOKEN). Метод /list уже отдаёт готовые суммы по НЕДЕЛЬНОМУ
+    отчёту — детализацию тянуть не нужно. Берём последний завершённый отчёт.
+    Возвращает (rows, period, note): rows = [(label, amount<0, is_fine)]."""
     if not WB_FIN_TOKEN:
-        return [], "нет токена (нужен WB_FIN_TOKEN, не read-only, категория «Финансы»)"
+        return [], None, "нет токена (WB_FIN_TOKEN, категория «Финансы»)"
     head = {"Authorization": WB_FIN_TOKEN, "Content-Type": "application/json"}
-
-    def post(path, body):
-        req = urllib.request.Request(WB_FIN_BASE + path, data=json.dumps(body).encode(), headers=head)
-        with urllib.request.urlopen(req, timeout=120, context=CTX) as r:
-            return json.load(r)
-
+    dto = date.today(); dfr = dto - timedelta(days=21)
     try:
-        # список отчётов за период → затем детализация по reportId
-        lst = post("/api/finance/v1/sales-reports/list", {"dateFrom": str(dfr), "dateTo": str(dto)})
-        reports = lst if isinstance(lst, list) else (lst.get("reports") or lst.get("data") or [])
-        rows = []
-        DED_HINTS = ("penalt", "штраф", "storage", "хранен", "deduct", "удерж",
-                     "accept", "приёмк", "приемк", "additional", "доплат", "fine")
-        for rep in reports:
-            rid = rep.get("reportId") or rep.get("id") or rep
-            det = post(f"/api/finance/v1/sales-reports/detailed/{rid}", {})
-            lines = det if isinstance(det, list) else (det.get("data") or det.get("report") or [])
-            for ln in lines:
-                reason = (ln.get("bonusTypeName") or ln.get("supplierOperName") or "")
-                amt = 0.0
-                for k, v in ln.items():
-                    if isinstance(v, (int, float)) and v and any(h in k.lower() for h in DED_HINTS):
-                        amt += v
-                if amt:
-                    lid = str(ln.get("rrdId") or ln.get("rrd_id") or ln.get("srid") or f"{rid}:{ln.get('nmId','')}:{amt}")
-                    rows.append((lid, reason or "удержание", amt, ln.get("rrDt") or ln.get("date") or ""))
-        return rows, None
+        req = urllib.request.Request(WB_FIN_BASE + "/api/finance/v1/sales-reports/list",
+                                     data=json.dumps({"dateFrom": str(dfr), "dateTo": str(dto)}).encode(), headers=head)
+        with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
+            reps = json.load(r)
     except urllib.error.HTTPError as e:
-        return [], f"HTTP {e.code} ({e.read().decode('utf-8','ignore')[:80]})"
+        return [], None, f"HTTP {e.code} ({e.read().decode('utf-8','ignore')[:80]})"
     except Exception as e:  # noqa: BLE001
-        return [], str(e)[:120]
+        return [], None, str(e)[:120]
+    reps = reps if isinstance(reps, list) else (reps.get("reports") or reps.get("data") or [])
+    if not reps:
+        return [], None, "нет отчётов за период"
+    rep = max(reps, key=lambda x: str(x.get("dateTo", "")))   # последний завершённый недельный отчёт
+
+    def f(k):
+        try: return abs(float(rep.get(k) or 0))
+        except (TypeError, ValueError): return 0.0
+    # логистику (deliveryServiceSum) НЕ берём — это не штраф/удержание
+    FIELDS = [("penaltySum", "Штрафы", True), ("deductionSum", "Удержания", False),
+              ("paidStorageSum", "Хранение", False), ("paidAcceptanceSum", "Приёмка", False),
+              ("additionalPaymentSum", "Доплаты", False)]
+    rows = [(label, -v, fine) for (k, label, fine) in FIELDS if (v := f(k))]
+    period = f"{rep.get('dateFrom', '')[5:]}–{rep.get('dateTo', '')[5:]}"
+    return rows, period, None
 
 
 def _fmt_rub(x: float) -> str:
@@ -214,8 +209,8 @@ def main():
         c, s = agg.get(tid, (0, 0.0))
         agg[tid] = (c + 1, s + amt)
 
-    # WB за ту же неделю
-    wb_rows, wb_note = wb_collect(start, end - timedelta(days=1))
+    # WB — последний завершённый недельный отчёт (суммы из /list)
+    wb_rows, wb_period, wb_note = wb_collect()
 
     lines = []
     grand = 0.0
@@ -231,15 +226,12 @@ def main():
         lines.append("\n".join(block))
 
     if wb_rows:
-        wagg = {}
-        for _, reason, amt, _dt in wb_rows:
-            c, s = wagg.get(reason, (0, 0.0))
-            wagg[reason] = (c + 1, s + amt)
-        block = ["<b>WB:</b>"]
+        block = [f"<b>WB</b> <i>(отчёт {wb_period}):</i>" if wb_period else "<b>WB:</b>"]
         total = 0.0
-        for reason, (c, s) in sorted(wagg.items(), key=lambda x: x[1][1]):
-            total += s
-            block.append(f"• {reason}: {_fmt_rub(s)}" + (f" ({c})" if c > 1 else ""))
+        for label, amt, fine in sorted(wb_rows, key=lambda x: x[1]):
+            total += amt
+            mark = "⚠️ " if fine else "• "
+            block.append(f"{mark}{label}: {_fmt_rub(amt)}")
         block.append(f"WB итого: {_fmt_rub(total)}")
         grand += total
         lines.append("\n".join(block))
