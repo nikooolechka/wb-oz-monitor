@@ -83,9 +83,10 @@ def basket_host(vol):
 def _wb_card(nm):
     # WB постоянно добавляет новые баскеты — таблица basket_host() может отставать
     # (23.10.2026: nm с vol=5831 жил на basket-30, таблица/перебор до 24 его не находили
-    # вообще, карточка не собиралась). Перебор расширен с запасом на будущий рост.
+    # вообще, карточка не собиралась). Живьём проверено 23.10: баскеты существуют до 65
+    # (66+ NXDOMAIN), перебор расширен до 90 — с запасом на будущий рост.
     vol=nm//100000; part=nm//1000
-    hosts=[basket_host(vol)]+[f"{i:02d}" for i in range(1,41)]
+    hosts=[basket_host(vol)]+[f"{i:02d}" for i in range(1,91)]
     for h in dict.fromkeys(hosts):
         try:
             base=f"https://basket-{h}.wbbasket.ru/vol{vol}/part{part}/{nm}"
