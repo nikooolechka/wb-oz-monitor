@@ -68,14 +68,21 @@ def basket_host(vol):
                   (2837,"17"),(3053,"18"),(3269,"19"),(3485,"20"),(3701,"21"),(3917,"22")]:
         if vol<=lim: return h
     return "23"
-def wb_collect(nm):
-    nm=int(nm); vol=nm//100000; part=nm//1000; cj=None; base=None
-    hosts=[basket_host(vol)]+[f"{i:02d}" for i in range(1,25)]
+def _wb_card(nm):
+    # WB постоянно добавляет новые баскеты — таблица basket_host() может отставать
+    # (23.10.2026: nm с vol=5831 жил на basket-30, таблица/перебор до 24 его не находили
+    # вообще, карточка не собиралась). Перебор расширен с запасом на будущий рост.
+    vol=nm//100000; part=nm//1000
+    hosts=[basket_host(vol)]+[f"{i:02d}" for i in range(1,41)]
     for h in dict.fromkeys(hosts):
         try:
             base=f"https://basket-{h}.wbbasket.ru/vol{vol}/part{part}/{nm}"
-            cj=json.loads(get(base+"/info/ru/card.json")); break
+            return json.loads(get(base+"/info/ru/card.json")), base
         except Exception: continue
+    return None, None
+def wb_collect(nm):
+    nm=int(nm)
+    cj, base = _wb_card(nm)
     if not cj: return None
     imt=cj.get("imt_id")
     opts={}
@@ -105,8 +112,8 @@ def wb_collect(nm):
     skleyka_names=[]
     for sn in sibling_nms[:6]:
         try:
-            svol=sn//100000; spart=sn//1000; sh=basket_host(svol)
-            scj=json.loads(get(f"https://basket-{sh}.wbbasket.ru/vol{svol}/part{spart}/{sn}/info/ru/card.json"))
+            scj, _ = _wb_card(sn)
+            if not scj: continue
             sname=scj.get("imt_name") or scj.get("subj_name")
             if sname: skleyka_names.append(sname)
         except Exception: continue
@@ -516,6 +523,17 @@ def _font(weight, sz):
         f.set_variation_by_axes([weight])  # 400 regular, 700 bold, 800 extrabold/black
         _FONT_CACHE[key] = f
     return _FONT_CACHE[key]
+def _star(dr, cx, cy, r, fill):
+    # Звезда рисуется многоугольником, НЕ текстовым глифом "★" — у Montserrat (и у многих
+    # других шрифтов) этого символа просто нет, PIL рисовал на его месте пустой квадрат.
+    import math
+    pts = []
+    for i in range(10):
+        ang = math.pi/2 + i*math.pi/5
+        rad = r if i % 2 == 0 else r*0.42
+        pts.append((cx+rad*math.cos(ang), cy-rad*math.sin(ang)))
+    dr.polygon(pts, fill=fill)
+
 def card_png(d, path):
     from PIL import Image, ImageDraw, ImageFilter
     W=H=1080
@@ -552,7 +570,7 @@ def card_png(d, path):
     pill=d.get("platform","WB"); pw=dr.textlength(pill,font=_font(700,24))+32
     dr.rounded_rectangle([rx,ry,rx+pw,ry+42],21,fill=(46,230,200)); dr.text((rx+16,ry+8),pill,font=_font(700,24),fill=(4,18,26))
     cy=ry+21; cx=rx+pw+20
-    dr.text((cx,cy),"★",font=_font(400,26),anchor="lm",fill=(255,210,63)); cx+=dr.textlength("★",font=_font(400,26))+10
+    _star(dr,cx+13,cy,13,(255,210,63)); cx+=36
     if d.get("rating"): dr.text((cx,cy),str(d["rating"]),font=_font(700,30),anchor="lm",fill=(255,210,63))
     ry+=60
     if d.get("reviews_total"):
@@ -592,7 +610,7 @@ def card_png(d, path):
         tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=(by+bh-iy-14)/5
         for k,c in rows:
             cyr=iy+rowh/2
-            dr.text((ix,cyr),k,font=_font(700,24),anchor="lm",fill=colors[k]); dr.text((ix+26,cyr+1),"★",font=_font(400,22),anchor="lm",fill=(255,210,63))
+            dr.text((ix,cyr),k,font=_font(700,24),anchor="lm",fill=colors[k]); _star(dr,ix+26+11,cyr+1,11,(255,210,63))
             th=14; ty=cyr-th/2; dr.rounded_rectangle([tx0,ty,tx1,ty+th],7,fill=(26,36,48))
             fw=int(tw*(c/mx))
             if fw>8: dr.rounded_rectangle([tx0,ty,tx0+fw,ty+th],7,fill=colors[k])
