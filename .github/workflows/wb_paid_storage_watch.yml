@@ -1,0 +1,47 @@
+name: Ловля перехода товара на платное хранение WB
+
+on:
+  schedule:
+    - cron: "0 6 * * 4"   # четверг 9:00 МСК (разнесено от вторника — там уже габариты+удержания)
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "1 = только лог, без отправки и без записи state"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wb-paid-storage
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Прогон монитора платного хранения WB
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATE_PATH: data/wb_paid_storage_state.json
+          DRY: ${{ github.event.inputs.dry }}
+        run: python wb_paid_storage_watch.py
+      - name: Сохранить состояние обратно
+        run: |
+          git config user.name  "monitor-bot"
+          git config user.email "monitor-bot@users.noreply.github.com"
+          git add data/wb_paid_storage_state.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "wb paid storage state update [skip ci]"
+            git push
+          else
+            echo "Состояние не изменилось."
+          fi
