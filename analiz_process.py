@@ -144,16 +144,17 @@ RECIPE_WORDS = ["рецепт", "состав", "вкус", "аромат", "ф�
 def _is_significant(count, total=None):
     return count >= MIN_COUNT
 
+def _stems(text):
+    """Грубый стемминг — первые 5 символов слова, чтобы 'горький'/'горькие'/'горечь' совпадали."""
+    words = re.findall(r"[а-яёa-z]{4,}", (text or "").lower())
+    return {w[:5] for w in words}
+
 def _real_count(theme_title, neg_texts):
-    """Считаем упоминания темы САМИ, не доверяя числу из ответа ИИ (он может завысить count).
-    Простое совпадение по значимым словам темы в реальном тексте жалоб."""
-    words = [w for w in re.findall(r"[а-яёa-z]{4,}", (theme_title or "").lower())]
-    if not words: return 0
-    cnt = 0
-    for t in neg_texts:
-        tl = (t or "").lower()
-        if any(w in tl for w in words): cnt += 1
-    return cnt
+    """Считаем упоминания темы САМИ, не доверяя числу из ответа ИИ (может завысить/выдумать).
+    Стемминг-совпадение (не точная подстрока — иначе 'горький' не матчит 'горькие')."""
+    stems = _stems(theme_title)
+    if not stems: return 0
+    return sum(1 for t in neg_texts if _stems(t) & stems)
 
 def _recent_reviews(revs, days=30):
     """Отзывы за последние N дней (по полю даты, разные платформы кладут её по-разному)."""
@@ -223,23 +224,34 @@ def _enforce_scale(raw, total, neg_texts=None):
     for c in complaints:
         real = _real_count(c.get("t"), neg_texts or []) if neg_texts is not None else int(c.get("count") or 0)
         sig[c.get("t")] = _is_significant(real)
+    sig_stems = {t: _stems(t) for t, s in sig.items() if s}  # стемы ТОЛЬКО значимых тем
+
+    def _justified(text, based_on):
+        if any(sig.get(t) for t in (based_on or [])): return True
+        item_stems = _stems(text)
+        return any(item_stems & st for st in sig_stems.values())
+
     kept = []
     for item in (raw.get("ideal") or []):
-        if isinstance(item, str):
-            # старый формат без scope — пропускаем как есть, но если похоже на смену рецептуры
-            # без привязки к конкретной значимой теме, на всякий случай не блокируем (нет данных для проверки)
-            kept.append(item); continue
-        text = item.get("text") or ""
-        scope = item.get("scope") or ("recipe" if _looks_like_recipe_change(text) else "fix")
-        based_on = item.get("based_on") or []
-        if scope == "recipe":
-            # разрешаем смену рецептуры/вкуса/материала ТОЛЬКО если хотя бы одна тема-основание значима
-            if not based_on or not any(sig.get(t) for t in based_on):
-                continue  # единичные жалобы — не повод менять продукт, вырезаем пункт
+        text = item if isinstance(item, str) else (item.get("text") or "")
+        declared_scope = (item.get("scope") if isinstance(item, dict) else None) or ""
+        based_on = (item.get("based_on") if isinstance(item, dict) else None) or []
+        # НЕ доверяем заявленному scope "fix" — ИИ может так обойти гейт. Своя эвристика по тексту ИЛИ.
+        is_recipe = (declared_scope == "recipe") or _looks_like_recipe_change(text)
+        if is_recipe and not _justified(text, based_on):
+            continue  # единичные жалобы — не повод менять продукт, вырезаем пункт
         kept.append(text)
-    if not kept:
-        kept = ["Товар в целом принимают хорошо — менять состав/рецептуру нет оснований; усилить подачу сильных сторон в карточке."]
-    raw["ideal"] = kept
+
+    # финальный независимый проход: ещё раз режем по уже готовому тексту, без доверия к scope вообще —
+    # перепроверка зашита в самой автоматизации, пока не сойдётся — наружу не уходит.
+    final = []
+    for text in kept:
+        if _looks_like_recipe_change(text) and not _justified(text, []):
+            continue
+        final.append(text)
+    if not final:
+        final = ["Товар в целом принимают хорошо — менять состав/рецептуру нет оснований; усилить подачу сильных сторон в карточке."]
+    raw["ideal"] = final
     for c in complaints:
         c.pop("count", None)  # во фронт не нужно, только для проверки
     return raw
