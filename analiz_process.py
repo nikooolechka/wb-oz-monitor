@@ -135,11 +135,20 @@ def oz_collect(pid, timeout=420):
 # ---------- Анализ — Claude (Anthropic API, ключ владельца, $100/мес бесплатных кредитов) ----------
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 # Порог значимости темы — считается КОДОМ, не зависит от того, послушался ли ИИ инструкции в тексте промпта.
-# Тема "значима" (можно предлагать менять рецептуру/вкус/материал под неё), если встретилась
-# хотя бы в MIN_SHARE доле отзывов ИЛИ хотя бы MIN_COUNT раз. Иначе — только фиксируем жалобу, но
-# в "идеальный товар" формулировки про смену рецептуры/вкуса/материала не допускаем программно.
-MIN_COUNT = 10      # жёсткий минимум: меньше 10 упоминаний темы ЗА ПОСЛЕДНИЙ МЕСЯЦ — не повод менять продукт (владелец, 2026-10-22)
+# Правило владельца (2026-10-22), применяется к КАЖДОЙ проверке, для любого товара, любой площадки:
+#   <4 упоминаний темы за последний месяц   -> игнорируем (шум, в рекомендации не попадает)
+#   4-9 упоминаний за последний месяц        -> "на заметку": разрешена МЯГКАЯ формулировка с явным числом
+#                                                и пометкой "единичные случаи", БЕЗ смены рецептуры/вкуса/состава
+#   10+ упоминаний за последний месяц        -> "значимо": разрешена ЛЮБАЯ рекомендация, включая смену рецептуры
+MINOR_COUNT = 4     # от скольки жалоб вообще стоит упомянуть тему как "на заметку"
+MIN_COUNT = 10      # от скольки — тема значима, можно предлагать менять рецептуру/вкус/состав
 RECIPE_WORDS = ["рецепт", "состав", "вкус", "аромат", "формул", "пропитк", "материал", "текстур", "плотн"]
+
+def _scale_level(count):
+    """minor: 4-9 (на заметку, без смены рецептуры) | significant: 10+ (можно любые правки) | none: <4 (игнор)."""
+    if count >= MIN_COUNT: return "significant"
+    if count >= MINOR_COUNT: return "minor"
+    return "none"
 
 def _is_significant(count, total=None):
     return count >= MIN_COUNT
@@ -181,9 +190,9 @@ def claude_analyze(data):
     revs = data.get("reviews") or []  # анализируем ВСЕ собранные отзывы, не только последний месяц
     revs_month = _recent_reviews(revs, 30)  # ТОЛЬКО для порога значимости темы (10+ за месяц), не для анализа
     total = data.get("reviews_total") or len(revs) or 1
-    pos = [(r.get("t") or r.get("p") or "") for r in revs if (r.get("s") in (5, 4)) and (r.get("t") or r.get("p"))][:25]
+    pos = [(r.get("t") or r.get("p") or "") for r in revs if (r.get("s") in (5, 4)) and (r.get("t") or r.get("p"))]
     neg = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
-           for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))][:30]
+           for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
     neg_month = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
                  for r in revs_month if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
     prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно».
@@ -521,6 +530,17 @@ def process_one():
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
             rt = data.get("reviews_total") or 0
+            # ВСЕГДА фиксируем: сколько отзывов реально прочитано (объём, что дал ИИ) и за какой период —
+            # честная плашка, отдельно от reviews_total (который может быть точным полем площадки, не выборкой).
+            revs_all = data.get("reviews") or []
+            processed_count = len(revs_all)
+            pdates = sorted(r.get("date") for r in revs_all if r.get("date"))
+            processed_period = None
+            if pdates:
+                def _fmt(d):
+                    try: return f"{d[8:10]}.{d[5:7]}.{d[0:4]}"
+                    except Exception: return d[:10]
+                processed_period = f"{_fmt(pdates[0])} – {_fmt(pdates[-1])}"
             entry={"id":f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}","platform":data["platform"],
                    "analyzed":today(),"requested_by":who or "","name":data["name"],"brand":data.get("brand",""),
                    "url":data["url"],"photo":data.get("photo"),"price":(int(data["price"]) if data.get("price") else None),
@@ -531,6 +551,8 @@ def process_one():
                    "neg_total": neg_total,
                    "neg_share": (f"{round(neg_total/rt*100,1)}%".replace(".0%","%") if rt else ""),
                    "skleyka": data.get("skleyka") or [],
+                   "processed_count": processed_count,
+                   "processed_period": processed_period,
                    **an}
             card_png(entry, "/tmp/card.png")
             update_dashboard(entry)
