@@ -195,10 +195,10 @@ def claude_analyze(data):
            for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
     neg_month = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
                  for r in revs_month if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
-    prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно».
+    prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно». Будь ИСЧЕРПЫВАЮЩИМ — не сокращай список, если есть о чём писать: распиши ВСЕ заметные темы жалоб (а не только 1-2 главные), дай МИНИМУМ 5-7 пунктов в "ideal" (упаковка, инфографика, позиционирование, контроль качества, доп-SKU и т.д.) — пустой/короткий ответ хуже длинного и подробного.
 
-ВАЖНО про "count": для КАЖДОЙ темы жалобы укажи ЧЕСТНОЕ целое число — сколько раз эта тема реально встретилась в списке ЖАЛОБ ниже (это жалобы ЗА ПОСЛЕДНИЙ МЕСЯЦ, посчитай сам, не выдумывай). Это число будет проверено кодом.
-Для "ideal" — у каждого пункта укажи "scope": "recipe" (если это предложение изменить состав/рецептуру/вкус/материал/текстуру товара) или "fix" (если это упаковка/инфографика/позиционирование/контроль качества — без изменения самого продукта), и "based_on" — список тем жалоб (t), на которых основан этот пункт (пустой список, если это общая рекомендация).
+В "complaints" и "praise" поле "desc" — ПОДРОБНОЕ качественное описание с конкретикой (что именно пишут покупатели, какие слова используют, в каких ситуациях), 1-2 предложения, НЕ короткая фраза в 3 слова. БЕЗ чисел и слов вроде "несколько"/"много" (числа посчитает код отдельно, не придумывай их).
+Для "ideal" — у каждого пункта укажи "scope": "recipe" (меняет состав/рецептуру/вкус/материал/текстуру товара) или "fix" (упаковка/инфографика/позиционирование/контроль качества/доп-SKU — без изменения продукта), и "based_on" — список тем жалоб (t), на которых основан пункт (пустой список для общей рекомендации). ВСЕГДА давай несколько "fix"-пунктов, даже если явных жалоб мало — по сильным сторонам/позиционированию/расширению тоже есть что сказать.
 
 ТОВАР: {data.get('name')}
 ПЛОЩАДКА: {data.get('platform')}
@@ -206,16 +206,16 @@ def claude_analyze(data):
 СОСТАВ: {data.get('sostav')}
 ОПИСАНИЕ ПРОДАВЦА: {(data.get('description') or '')[:1500]}
 ПОХВАЛА ИЗ ОТЗЫВОВ: {json.dumps(pos, ensure_ascii=False)}
-ЖАЛОБЫ ИЗ ОТЗЫВОВ ({len(neg)} шт, пронумерованы для подсчёта): {json.dumps(neg, ensure_ascii=False)}
+ЖАЛОБЫ ИЗ ОТЗЫВОВ ({len(neg)} шт): {json.dumps(neg, ensure_ascii=False)}
 
 Верни СТРОГО валидный JSON, без markdown-обрамления, по схеме:
 {{"ca":"кто покупает и зачем, 1-2 предложения",
 "seller_claims":["что продавец обещает в карточке, 4-6 пунктов"],
-"praise":["за что хвалят в отзывах, 3-5 пунктов"],
-"complaints":[{{"t":"тема жалобы простыми словами","n":"человеческое пояснение сути","count":0}}],
+"praise":[{{"t":"тема простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
+"complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
 "ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 2200,
+    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 3000,
                         "messages": [{"role": "user", "content": prompt}]}).encode()
     r = get("https://api.anthropic.com/v1/messages",
             hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
@@ -224,19 +224,47 @@ def claude_analyze(data):
     txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
     m = re.search(r"\{.*\}", txt, re.S)
     raw = json.loads(m.group(0))
-    # порог значимости (10+ на тему) считаем ТОЛЬКО по жалобам за последний месяц — код, не ИИ
-    return _enforce_scale(raw, total, neg_month)
+    # Значимость темы (10+ за месяц) считаем ТОЛЬКО кодом. Полный текст жалоб/похвал (вся история)
+    # идёт на подсчёт реального числа для КАЖДОЙ темы — она всегда попадает в вывод явным числом.
+    return _enforce_scale(raw, total, neg_month, neg, pos)
 
-def _enforce_scale(raw, total, neg_texts=None):
-    """Код, не ИИ, решает: можно ли предлагать менять рецептуру/вкус/состав под эту тему.
-    Значимость темы считаем САМИ по реальному тексту жалоб (_real_count) — числу "count" из
-    ответа ИИ не доверяем, оно может быть завышено/придумано. Срезает recipe-level пункты
-    'идеального товара', если их тема жалобы незначима по масштабу."""
+def _enforce_scale(raw, total, neg_month_texts, neg_all_texts, pos_texts=None):
+    """Код, не ИИ, решает всё, что касается чисел и допустимости менять продукт:
+    - для каждой темы жалобы считаем РЕАЛЬНОЕ число (всего и за месяц) и ВСЕГДА пишем его явно;
+    - recipe-level правки (менять вкус/состав/материал) допускаем только для тем с 10+ жалоб за месяц;
+    - темы с 4-9 жалобами за месяц получают программно собранную пометку «на заметку» с точным числом;
+    - темы <4 за месяц — слишком мало, из рекомендаций исключаем (но из complaints не убираем,
+      если по ВСЕЙ истории накопилось заметное число — информативность важнее)."""
     complaints = raw.get("complaints") or []
-    sig = {}
+    sig = {}; levels = {}; counts_all = {}; counts_month = {}
+    kept_complaints = []
     for c in complaints:
-        real = _real_count(c.get("t"), neg_texts or []) if neg_texts is not None else int(c.get("count") or 0)
-        sig[c.get("t")] = _is_significant(real)
+        t = c.get("t") or ""
+        c_all = _real_count(t, neg_all_texts)
+        c_month = _real_count(t, neg_month_texts)
+        counts_all[t] = c_all; counts_month[t] = c_month
+        lvl = _scale_level(c_month)
+        levels[t] = lvl; sig[t] = (lvl == "significant")
+        if c_all < 2 and c_month < 2:
+            continue  # совсем единичный случай (1 раз) — шум, не информативно даже для списка
+        desc = (c.get("desc") or c.get("n") or "").strip()
+        c["n"] = f"{c_all} {_plural(c_all)} всего" + (f", {c_month} за последний месяц" if c_month and c_month != c_all else "") + (f" — {desc}" if desc else "")
+        c.pop("desc", None); c.pop("count", None)
+        kept_complaints.append(c)
+    raw["complaints"] = kept_complaints or [{"t": "Явных жалоб не выявлено", "n": ""}]
+
+    # Похвала — та же глубина: реальное число + подробное описание (владелец, 2026-10-22: "сейчас сжато").
+    praise_out = []
+    for p in (raw.get("praise") or []):
+        if isinstance(p, str):
+            praise_out.append(p); continue  # старый формат без t/desc — не ломаем
+        t = p.get("t") or ""; desc = (p.get("desc") or "").strip()
+        cnt = _real_count(t, pos_texts or []) if pos_texts is not None else 0
+        line = (f"{cnt} {_plural(cnt)}" if cnt >= 2 else "").strip()
+        text = f"{t}" + (f" — {desc}" if desc else "")
+        praise_out.append(f"{text} ({line})" if line else text)
+    raw["praise"] = praise_out
+
     sig_stems = {t: _stems(t) for t, s in sig.items() if s}  # стемы ТОЛЬКО значимых тем
 
     def _justified(text, based_on):
@@ -262,11 +290,24 @@ def _enforce_scale(raw, total, neg_texts=None):
         if _looks_like_recipe_change(text) and not _justified(text, []):
             continue
         final.append(text)
+
+    # "НА ЗАМЕТКУ" — программно, не от ИИ: для тем с 4-9 жалобами за месяц, которых ещё нет
+    # среди kept-рекомендаций, добавляем мягкий пункт с ТОЧНЫМ числом (владелец, 2026-10-22):
+    # "если 4-9 отзывов на тему — тоже учитывай, но пиши сколько и что это единичные возражения".
+    mentioned = set()
+    for text in final:
+        for t in levels:
+            if _stems(t) & _stems(text): mentioned.add(t)
+    for t, lvl in levels.items():
+        if lvl == "minor" and t not in mentioned:
+            cm = counts_month.get(t, 0); ca = counts_all.get(t, 0)
+            final.append(f"На заметку: «{t.lower()}» — {cm} {_plural(cm)} за последний месяц"
+                         f"{f' ({ca} за всё время)' if ca != cm else ''}. Это единичные возражения, "
+                         f"менять продукт рано, но стоит последить за динамикой.")
+
     if not final:
         final = ["Товар в целом принимают хорошо — менять состав/рецептуру нет оснований; усилить подачу сильных сторон в карточке."]
     raw["ideal"] = final
-    for c in complaints:
-        c.pop("count", None)  # во фронт не нужно, только для проверки
     return raw
 
 # ---------- Анализ СВОИМ кодом (правила) — запасной вариант, если ключ недоступен ----------
@@ -372,12 +413,17 @@ def rule_analyze(data):
             "complaints":complaints or [{"t":"Явных частых жалоб в собранных отзывах не выявлено","n":""}],
             "gaps":gaps,"ideal":ideal}
 
-# ---------- Карточка (PIL, облачные шрифты DejaVu) ----------
-def _font(bold, sz):
+# ---------- Карточка (PIL, Montserrat — чистый премиальный геометричный шрифт с кириллицей) ----------
+_FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts", "Montserrat.ttf")
+_FONT_CACHE = {}
+def _font(weight, sz):
     from PIL import ImageFont
-    base="/usr/share/fonts/truetype/dejavu/"
-    f=base+("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf")
-    return ImageFont.truetype(f, sz)
+    key = (weight, sz)
+    if key not in _FONT_CACHE:
+        f = ImageFont.truetype(_FONT_PATH, sz)
+        f.set_variation_by_axes([weight])  # 400 regular, 700 bold, 800 extrabold/black
+        _FONT_CACHE[key] = f
+    return _FONT_CACHE[key]
 def card_png(d, path):
     from PIL import Image, ImageDraw, ImageFilter
     W=H=1080
@@ -389,7 +435,7 @@ def card_png(d, path):
         lay=lay.filter(ImageFilter.GaussianBlur(120)); img.paste(Image.alpha_composite(img.convert("RGBA"),lay).convert("RGB"),(0,0))
     glow(90,70,300,(25,182,255),150); glow(1010,1010,320,(139,92,246),140); glow(540,1120,320,(46,230,200),100)
     dr=ImageDraw.Draw(img); PAD=64
-    dr.text((PAD,52),"АС-ФАРМ · АНАЛИЗ КАРТОЧКИ",font=_font(1,24),fill=(46,230,200))
+    dr.text((PAD,52),"АС-ФАРМ · АНАЛИЗ КАРТОЧКИ",font=_font(700,24),fill=(46,230,200))
     PS=340; px=PAD; py=104
     try:
         raw=get(d["photo"], t=20); from PIL import Image as I2; ph=I2.open(io.BytesIO(raw)).convert("RGB")
@@ -408,36 +454,36 @@ def card_png(d, path):
             else: out.append(cur); cur=w
         if cur: out.append(cur)
         return out
-    for ln in wrap(d["name"],_font(1,34),rw)[:4]:
-        dr.text((rx,ry),ln,font=_font(1,34),fill=(234,242,247)); ry+=43
+    for ln in wrap(d["name"],_font(700,34),rw)[:4]:
+        dr.text((rx,ry),ln,font=_font(700,34),fill=(234,242,247)); ry+=43
     ry+=12
-    pill=d.get("platform","WB"); pw=dr.textlength(pill,font=_font(1,24))+32
-    dr.rounded_rectangle([rx,ry,rx+pw,ry+42],21,fill=(46,230,200)); dr.text((rx+16,ry+8),pill,font=_font(1,24),fill=(4,18,26))
+    pill=d.get("platform","WB"); pw=dr.textlength(pill,font=_font(700,24))+32
+    dr.rounded_rectangle([rx,ry,rx+pw,ry+42],21,fill=(46,230,200)); dr.text((rx+16,ry+8),pill,font=_font(700,24),fill=(4,18,26))
     cy=ry+21; cx=rx+pw+20
-    dr.text((cx,cy),"★",font=_font(0,26),anchor="lm",fill=(255,210,63)); cx+=dr.textlength("★",font=_font(0,26))+10
-    if d.get("rating"): dr.text((cx,cy),str(d["rating"]),font=_font(1,30),anchor="lm",fill=(255,210,63))
+    dr.text((cx,cy),"★",font=_font(400,26),anchor="lm",fill=(255,210,63)); cx+=dr.textlength("★",font=_font(400,26))+10
+    if d.get("rating"): dr.text((cx,cy),str(d["rating"]),font=_font(700,30),anchor="lm",fill=(255,210,63))
     ry+=60
     if d.get("reviews_total"):
-        dr.text((rx,ry),f"{d['reviews_total']:,}".replace(","," ")+" отзывов на товар",font=_font(0,25),fill=(142,163,180)); ry+=46
+        dr.text((rx,ry),f"{d['reviews_total']:,}".replace(","," ")+" отзывов на товар",font=_font(400,25),fill=(142,163,180)); ry+=46
     if d.get("price"):
         num=f"{int(d['price']):,}".replace(","," ")
-        dr.text((rx,ry),num,font=_font(1,46),fill=(234,242,247)); nx=rx+dr.textlength(num,font=_font(1,46))+12
-        dr.text((nx,ry+8),"₽",font=_font(1,36),fill=(234,242,247)); nx+=dr.textlength("₽",font=_font(1,36))
+        dr.text((rx,ry),num,font=_font(800,46),fill=(234,242,247)); nx=rx+dr.textlength(num,font=_font(800,46))+12
+        dr.text((nx,ry+8),"₽",font=_font(700,36),fill=(234,242,247)); nx+=dr.textlength("₽",font=_font(700,36))
         if d.get("price_old"):
             oldn=f"{int(d['price_old']):,}".replace(","," ")+" ₽"
-            ox=nx+22; dr.text((ox,ry+14),oldn,font=_font(0,26),fill=(120,135,150))
-            ow=dr.textlength(oldn,font=_font(0,26)); dr.line([(ox,ry+28),(ox+ow,ry+28)],fill=(120,135,150),width=2)
+            ox=nx+22; dr.text((ox,ry+14),oldn,font=_font(400,26),fill=(120,135,150))
+            ow=dr.textlength(oldn,font=_font(400,26)); dr.line([(ox,ry+28),(ox+ow,ry+28)],fill=(120,135,150),width=2)
     by=py+PS+44
     dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=24
-    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(1,21),fill=(46,230,200)); by+=32
-    for ln in wrap(d.get("ca",""),_font(0,26),W-2*PAD)[:2]:
-        dr.text((PAD,by),ln,font=_font(0,26),fill=(206,220,230)); by+=34
+    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,21),fill=(46,230,200)); by+=32
+    for ln in wrap(d.get("ca",""),_font(400,26),W-2*PAD)[:2]:
+        dr.text((PAD,by),ln,font=_font(400,26),fill=(206,220,230)); by+=34
     by+=12
-    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(1,21),fill=(46,230,200)); by+=36
+    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
     for t in (d.get("seller_claims") or [])[:3]:
         dr.ellipse([PAD+2,by+11,PAD+11,by+20],fill=(46,230,200))
-        for ln in wrap(t,_font(0,25),W-2*PAD-28)[:2]:
-            dr.text((PAD+26,by),ln,font=_font(0,25),fill=(234,242,247)); by+=33
+        for ln in wrap(t,_font(400,25),W-2*PAD-28)[:2]:
+            dr.text((PAD+26,by),ln,font=_font(400,25),fill=(234,242,247)); by+=33
         by+=6
     by+=10; bx0,bx1=PAD,W-PAD; bh=H-40-by
     pan=Image.new("RGBA",(W,H),(0,0,0,0))
@@ -445,28 +491,28 @@ def card_png(d, path):
     img.paste(Image.alpha_composite(img.convert("RGBA"),pan).convert("RGB"),(0,0)); dr=ImageDraw.Draw(img)
     iy=by+20; ix=bx0+26; stars=d.get("stars")
     if stars and sum(stars.values())>0:
-        dr.text((ix,iy),"ОЦЕНКИ ПОКУПАТЕЛЕЙ",font=_font(1,20),fill=(46,230,200))
+        dr.text((ix,iy),"ОЦЕНКИ ПОКУПАТЕЛЕЙ",font=_font(700,20),fill=(46,230,200))
         if d.get("stars_collected") and d["stars_collected"]<d.get("reviews_total",0):
-            dr.text((bx1-26,iy),f"собрано {d['stars_collected']}/{d['reviews_total']}".replace(",",""),font=_font(0,19),anchor="ra",fill=(142,163,180))
+            dr.text((bx1-26,iy),f"собрано {d['stars_collected']}/{d['reviews_total']}".replace(",",""),font=_font(400,19),anchor="ra",fill=(142,163,180))
         iy+=42
         rows=[(k,stars.get(k,0)) for k in ("5","4","3","2","1")]; mx=max(1,*[c for _,c in rows])
         colors={"5":(72,229,155),"4":(46,230,200),"3":(255,210,63),"2":(255,150,80),"1":(255,107,125)}
         tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=(by+bh-iy-14)/5
         for k,c in rows:
             cyr=iy+rowh/2
-            dr.text((ix,cyr),k,font=_font(1,24),anchor="lm",fill=colors[k]); dr.text((ix+26,cyr+1),"★",font=_font(0,22),anchor="lm",fill=(255,210,63))
+            dr.text((ix,cyr),k,font=_font(700,24),anchor="lm",fill=colors[k]); dr.text((ix+26,cyr+1),"★",font=_font(400,22),anchor="lm",fill=(255,210,63))
             th=14; ty=cyr-th/2; dr.rounded_rectangle([tx0,ty,tx1,ty+th],7,fill=(26,36,48))
             fw=int(tw*(c/mx))
             if fw>8: dr.rounded_rectangle([tx0,ty,tx0+fw,ty+th],7,fill=colors[k])
-            dr.text((bx1-26,cyr),f"{c:,}".replace(","," ")+" отз.",font=_font(1,22),anchor="rm",fill=(234,242,247))
+            dr.text((bx1-26,cyr),f"{c:,}".replace(","," ")+" отз.",font=_font(700,22),anchor="rm",fill=(234,242,247))
             iy+=rowh
     else:
-        dr.text((ix,iy),"ГЛАВНОЕ ИЗ ОТЗЫВОВ",font=_font(1,20),fill=(46,230,200)); iy+=42
+        dr.text((ix,iy),"ГЛАВНОЕ ИЗ ОТЗЫВОВ",font=_font(700,20),fill=(46,230,200)); iy+=42
         pr=(d.get("praise") or [""])[0]; cp=(d.get("complaints") or [{}])[0].get("t","")
-        dr.text((ix,iy),"За что хвалят:",font=_font(1,20),fill=(72,229,155)); iy+=30
-        for ln in wrap(pr,_font(0,24),bx1-ix-26)[:2]: dr.text((ix,iy),ln,font=_font(0,24),fill=(234,242,247)); iy+=31
-        iy+=14; dr.text((ix,iy),"Главная жалоба:",font=_font(1,20),fill=(255,107,125)); iy+=30
-        for ln in wrap(cp,_font(0,24),bx1-ix-26)[:3]: dr.text((ix,iy),ln,font=_font(0,24),fill=(255,220,224)); iy+=31
+        dr.text((ix,iy),"За что хвалят:",font=_font(700,20),fill=(72,229,155)); iy+=30
+        for ln in wrap(pr,_font(400,24),bx1-ix-26)[:2]: dr.text((ix,iy),ln,font=_font(400,24),fill=(234,242,247)); iy+=31
+        iy+=14; dr.text((ix,iy),"Главная жалоба:",font=_font(700,20),fill=(255,107,125)); iy+=30
+        for ln in wrap(cp,_font(400,24),bx1-ix-26)[:3]: dr.text((ix,iy),ln,font=_font(400,24),fill=(255,220,224)); iy+=31
     img.save(path,"PNG")
 
 # ---------- Обновление дашборда (docs/analiz_data.json в pages-репо) ----------
