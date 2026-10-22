@@ -215,7 +215,7 @@ def claude_analyze(data):
 "complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
 "ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 3000,
+    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 6000,
                         "messages": [{"role": "user", "content": prompt}]}).encode()
     # Ретраи: ИИ — ЕДИНСТВЕННЫЙ источник выводов (универсальный для любого товара, не только нашей ниши).
     # Если сбойнуло один раз (сеть/лимит) — пробуем ещё, вместо того чтобы тихо откатываться на
@@ -591,14 +591,21 @@ def process_one():
             data=None
         if not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
+        elif not ANTHROPIC_KEY:
+            tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
+            an = None
         else:
             try:
-                an = claude_analyze(data) if ANTHROPIC_KEY else rule_analyze(data)
+                an = claude_analyze(data)
             except Exception as e:
                 import traceback
-                print("claude_analyze FAILED, откат на rule_analyze:", repr(e)[:400])
+                print("claude_analyze FAILED даже после ретраев:", repr(e)[:400])
                 traceback.print_exc()
-                an = rule_analyze(data)
+                # НИКОГДА не публикуем фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП"
+                # недопустимы для ЛЮБОГО товара) — честно сообщаем и просим повторить.
+                tg_msg(chat,"Не смог сделать разбор — ИИ не ответил после 10 попыток. Пришли ссылку ещё раз чуть позже.")
+                an = None
+        if data and an is not None:
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
             rt = data.get("reviews_total") or 0
