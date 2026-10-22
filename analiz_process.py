@@ -408,13 +408,19 @@ def process_one():
                 an = claude_analyze(data) if ANTHROPIC_KEY else rule_analyze(data)
             except Exception:
                 an = rule_analyze(data)
+            st = data.get("stars") or {}
+            neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
+            rt = data.get("reviews_total") or 0
             entry={"id":f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}","platform":data["platform"],
                    "analyzed":today(),"requested_by":who or "","name":data["name"],"brand":data.get("brand",""),
                    "url":data["url"],"photo":data.get("photo"),"price":(int(data["price"]) if data.get("price") else None),
                    "price_old":(int(data["price_old"]) if data.get("price_old") else None),"rating":data.get("rating"),
-                   "reviews_total":data.get("reviews_total") or 0,"stars":data.get("stars"),
+                   "reviews_total":rt,"stars":data.get("stars"),
                    "stars_collected":data.get("stars_collected"),
                    "stars_note":("Ozon не публикует полную разбивку — показано по собранным отзывам." if data["platform"]=="OZ" and data.get("stars_collected") else ""),
+                   "neg_total": neg_total,
+                   "neg_share": (f"{round(neg_total/rt*100,1)}%".replace(".0%","%") if rt else ""),
+                   "skleyka": data.get("skleyka") or [],
                    **an}
             card_png(entry, "/tmp/card.png")
             update_dashboard(entry)
