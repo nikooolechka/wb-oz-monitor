@@ -227,26 +227,37 @@ def claude_analyze(data):
 "complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
 "ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 6000,
-                        "messages": [{"role": "user", "content": prompt}]}).encode()
     # Ретраи: ИИ — ЕДИНСТВЕННЫЙ источник выводов (универсальный для любого товара, не только нашей ниши).
     # Если сбойнуло один раз (сеть/лимит) — пробуем ещё, вместо того чтобы тихо откатываться на
     # фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП" недопустимы для любого товара).
+    #
+    # КОРЕНЬ прежнего бага: max_tokens был мал -> ответ ИИ обрывался на середине JSON -> парсинг падал.
+    # Чтобы это НЕ повторилось ни для какого товара (у разных товаров разный объём описания/отзывов,
+    # фиксированное число токенов рано или поздно снова окажется мало) — проверяем ЯВНЫЙ сигнал API
+    # stop_reason=="max_tokens" (100% надёжный признак обрезки, не гадание по тексту ошибки) и, если он
+    # есть, САМИ удваиваем лимит на следующей попытке — лимит подстраивается под любой товар автоматически.
     last_err = None
     ATTEMPTS = 10
+    cur_max_tokens = 6000
     for attempt in range(ATTEMPTS):
         try:
+            body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": cur_max_tokens,
+                                "messages": [{"role": "user", "content": prompt}]}).encode()
             r = get("https://api.anthropic.com/v1/messages",
                     hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
                     data=body, t=90)
-            txt = json.loads(r)["content"][0]["text"]
+            resp = json.loads(r)
+            if resp.get("stop_reason") == "max_tokens":
+                cur_max_tokens = min(cur_max_tokens * 2, 16000)
+                raise RuntimeError(f"ответ обрезан по лимиту токенов, увеличиваю до {cur_max_tokens} и повторяю")
+            txt = resp["content"][0]["text"]
             txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
             m = re.search(r"\{.*\}", txt, re.S)
             raw = json.loads(m.group(0))
             break
         except Exception as e:
             last_err = e
-            print(f"claude_analyze попытка {attempt+1}/{ATTEMPTS} провалилась: {repr(e)[:200]}")
+            print(f"claude_analyze попытка {attempt+1}/{ATTEMPTS} провалилась (max_tokens={cur_max_tokens}): {repr(e)[:200]}")
             if attempt < ATTEMPTS - 1: time.sleep(10)
     else:
         raise RuntimeError(f"claude_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
