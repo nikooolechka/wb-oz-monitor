@@ -826,6 +826,10 @@ def today():
     return (datetime.datetime.utcnow()+datetime.timedelta(hours=3)).strftime("%d.%m.%Y")
 
 def process_one():
+    # Общий FIFO: кто первый прислал — тот первый в очереди (берём САМУЮ СТАРУЮ ссылку, lines[0]).
+    # Приёмник дописывает ссылки в конец по порядку прихода (от любого человека), обрабатываем
+    # строго по этому порядку. Результат уходит ТОЛЬКО тому, кто запросил — chat зашит в строке
+    # очереди, карточка/сообщение шлётся именно в этот chat (владелец, 23.10.2026).
     q=sread(QUEUE_CELL)
     lines=[x for x in q.split("\n") if x.strip()]
     if not lines: return "empty"
