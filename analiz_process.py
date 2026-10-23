@@ -258,9 +258,13 @@ def oz_collect(pid, timeout=420, url=None):
     if url:
         mu = re.search(r"/product/([A-Za-z0-9\-]*\d{6,})/?", url)
         if mu: arg = "/product/" + mu.group(1) + "/"
+    # Разовый код этого запроса — результат примем ТОЛЬКО с ним. Пульт A1 общий (цены/др. сессии),
+    # поэтому без nonce можно подхватить чужой/старый результат → отчёт уходил не на тот товар.
+    import uuid
+    nonce = "n" + uuid.uuid4().hex[:12]
     swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
            "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/oz_card_pc.py' -OutFile \"$d\\oz_card_pc.py\";"
-           f"& $py \"$d\\oz_card_pc.py\" \"{arg}\" 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
+           f"& $py \"$d\\oz_card_pc.py\" \"{arg}\" \"{nonce}\" 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
     start=time.time()
     while time.time()-start<timeout:
         time.sleep(15)
@@ -269,10 +273,10 @@ def oz_collect(pid, timeout=420, url=None):
         if m:
             try:
                 d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
-                # Пульт A1 ОБЩИЙ — результат предыдущего товара может ещё висеть. Принимаем ТОЛЬКО
-                # если артикул в ответе == запрошенному (иначе это старый результат → ждём свежий).
-                # Без этого при нескольких ссылках подряд отчёты перемешивались (23.10.2026).
-                if str(d.get("pid") or "") != str(pid):
+                # Принимаем ТОЛЬКО результат с НАШИМ разовым кодом (и артикулом) — иначе это чужой/
+                # старый результат на общем пульте → ждём свежий. Это и держит очередь строго по
+                # порядку: каждый запрос получает ровно свой результат (23.10.2026).
+                if str(d.get("nonce") or "") != nonce or str(d.get("pid") or "") != str(pid):
                     continue
                 if d.get("_sku_mismatch"):
                     # Ozon упорно отдаёт ДРУГОЙ вариант группы вместо запрошенного — анализировать
