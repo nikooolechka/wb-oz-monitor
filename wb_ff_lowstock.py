@@ -62,7 +62,7 @@ def save_state(st):
 def tg(text, chat=None):
     tok = os.environ["TELEGRAM_BOT_TOKEN"].strip()
     chat = chat or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}).encode()
+    body = json.dumps({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True, "disable_notification": (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5}).encode()
     r = urllib.request.Request(f"https://api.telegram.org/bot{tok}/sendMessage", data=body, headers={"Content-Type":"application/json"})
     res = json.loads(urllib.request.urlopen(r, context=CTX, timeout=60).read())
     print("TG:", res.get("ok"), "" if res.get("ok") else res); return res.get("ok", False)
