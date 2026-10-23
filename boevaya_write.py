@@ -125,7 +125,22 @@ for i, rw in enumerate(rrB):
 Hb = col("H2:H60"); oz_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Hb) if r and str(r[0]).strip()]
 Ob = col("O2:O60"); ym_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Ob) if r and str(r[0]).strip()]
 
-wbapi = {} if os.environ.get("SKIP_WB_API") == "1" else wb_dospp()  # WB лимит: не долбить goods/filter часто
+def wb_cell(rng):
+    try: return gapi("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{qq(SHEET+'!'+rng)}").get("values", [[""]])[0][0]
+    except Exception: return ""
+def resolve_wbapi():
+    # ВБ до-СПП (C) НЕ обновляем каждый час (WB-лимит). Обновляем перед скринами, 1 раз на окно (утро/вечер).
+    if os.environ.get("SKIP_WB_API") == "1":
+        return {}  # почасовой прогон — WB не трогаем
+    win = "am" if msk().hour < 12 else "pm"
+    tag = f"wbc {msk().strftime('%Y-%m-%d')} {win}"
+    if wb_cell("AZ1") == tag:
+        print("WB до-СПП уже обновлён в этом окне — пропуск (не долблю WB)"); return {}
+    res = wb_dospp()
+    if res:  # успех -> помечаем окно (AZ1), чтобы не дёргать WB повторно на следующих тиках
+        gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{qq(SHEET+'!AZ1')}?valueInputOption=RAW", {"values": [[tag]]})
+    return res
+wbapi = resolve_wbapi()
 ozapi = oz_prices([a for a, _ in oz_rows])
 ymapi = ym_basic()
 print(f"API: wb_доСПП={len(wbapi)} oz_J={len(ozapi)} ym_P={len(ymapi)}")
