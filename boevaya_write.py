@@ -125,7 +125,7 @@ for i, rw in enumerate(rrB):
 Hb = col("H2:H60"); oz_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Hb) if r and str(r[0]).strip()]
 Ob = col("O2:O60"); ym_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Ob) if r and str(r[0]).strip()]
 
-wbapi = wb_dospp()
+wbapi = {} if os.environ.get("SKIP_WB_API") == "1" else wb_dospp()  # WB лимит: не долбить goods/filter часто
 ozapi = oz_prices([a for a, _ in oz_rows])
 ymapi = ym_basic()
 print(f"API: wb_доСПП={len(wbapi)} oz_J={len(ozapi)} ym_P={len(ymapi)}")
