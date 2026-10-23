@@ -699,7 +699,7 @@ def _alert_fail(err):
         if not t or not c:
             return
         msg = f"<b>FBS-монитор упал</b>\n{str(err)[:300]}\nВозможно Ozon/WB снова сменили API — нужна проверка."
-        body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML"}).encode()
+        body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML", "disable_notification": ("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
         urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage", data=body), context=CTX, timeout=25).read()
     except Exception:
         pass
