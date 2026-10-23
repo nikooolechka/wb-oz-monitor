@@ -95,7 +95,8 @@ def read_vals(rng):
 def notify(text):
     if not TG_TOKEN:
         print("[WARN] нет TELEGRAM_BOT_TOKEN — алерт не отправлен"); return
-    body = json.dumps({"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"}).encode()
+    silent = msk().weekday() >= 5   # выходные (сб/вс) — без звука
+    body = json.dumps({"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML", "disable_notification": silent}).encode()
     r = urllib.request.Request(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=body,
         headers={"Content-Type": "application/json"})
     urllib.request.urlopen(r, context=CTX, timeout=25).read()
