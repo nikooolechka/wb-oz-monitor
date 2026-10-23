@@ -313,6 +313,7 @@ def oz_collect(pid, timeout=420, url=None):
                             "name":d.get("name"),"brand":"","price":d.get("price_card") or d.get("price"),
                             "price_old":d.get("price_old"),"rating":d.get("rating"),
                             "reviews_total":d.get("reviews_all") or d.get("stars_collected") or 0,
+                            "reviews_pool_total":d.get("reviews_pool_total") or 0,
                             "skleyka_reviews_count":d.get("skleyka_reviews_count"),
                             "skleyka":d.get("skleyka") or [],
                             "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
@@ -795,6 +796,12 @@ def card_png(d, path):
             if fw>8: dr.rounded_rectangle([tx0,ty,tx0+fw,ty+th],7,fill=colors[k])
             dr.text((bx1-26,cyr),f"{c:,}".replace(","," ")+" отз.",font=_font(700,22),anchor="rm",fill=(234,242,247))
             iy+=rowh
+    elif (d.get("reviews_total") or 0)==0:
+        # Честный 0: у этого варианта нет собственных отзывов (все на карточке — других вариантов).
+        dr.text((ix,iy),"ОТЗЫВЫ ПО ЭТОМУ ВАРИАНТУ",font=_font(700,20),fill=(46,230,200)); iy+=40
+        dr.text((ix,iy),"Собственных отзывов пока нет —",font=_font(400,24),fill=(234,242,247)); iy+=32
+        dr.text((ix,iy),"новый/непроверенный вариант линейки.",font=_font(400,24),fill=(234,242,247)); iy+=38
+        dr.text((ix,iy),"Анализ — по карточке продавца.",font=_font(400,22),fill=(142,163,180))
     else:
         dr.text((ix,iy),"ГЛАВНОЕ ИЗ ОТЗЫВОВ",font=_font(700,20),fill=(46,230,200)); iy+=38
         pr=(d.get("praise") or [""])[0]; cp=(d.get("complaints") or [{}])[0].get("t","")
@@ -889,10 +896,11 @@ def process_one():
             data=None
         elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
-        elif not (data.get("stars") and sum(int(v or 0) for v in data["stars"].values())>0) or not data.get("rating"):
-            # Карточка ПУБЛИКУЕТСЯ только с рейтингом И разбивкой по звёздам (владелец, 23.10.2026:
-            # без рейтинга/отзывов — недопустимо). Нет звёзд/рейтинга = сбой сборщика (антибот/
-            # занятый браузер), а не "отзывов нет" → честный отказ, не рисуем пустую карточку.
+        elif (not (data.get("stars") and sum(int(v or 0) for v in data["stars"].values())>0)) and not (
+                data.get("name") and (data.get("reviews_pool_total") or 0)>0):
+            # Нет звёзд И это НЕ честный 0: пул отзывов не собрался (reviews_pool_total==0) ИЛИ
+            # карточка не загрузилась → сбой сборщика (антибот/занятый браузер) → честный отказ.
+            # ЧЕСТНЫЙ 0 (пул собран, но по этому itemId 0 отзывов) — сюда НЕ попадает, публикуется ниже.
             tg_msg(chat,"👻УПС - что то сломалось\nСобрал карточку, но не смог собрать отзывы/рейтинг. Пришли ссылку ещё раз чуть позже.")
             tg_msg(OWNER_CHAT,"бот аналитик сломался, нужна починка")
             data=None
@@ -925,6 +933,16 @@ def process_one():
                     try: return f"{d[8:10]}.{d[5:7]}.{d[0:4]}"
                     except Exception: return d[:10]
                 processed_period = f"{_fmt(pdates[0])} – {_fmt(pdates[-1])}"
+            # Пометка про отзывы (OZ): честный 0 ИЛИ «показаны все N по этому артикулу (+ сколько в линейке)».
+            pool = int(data.get("reviews_pool_total") or 0)
+            _snote = ""
+            if data["platform"] == "OZ":
+                if rt == 0 and pool > 0:
+                    _snote = "0 собственных отзывов по этому варианту — все отзывы на карточке относятся к другим вариантам линейки."
+                elif rt:
+                    _snote = f"Показаны ВСЕ {rt} отзывов по этому артикулу (по его ID на Ozon)."
+                    if pool > rt:
+                        _snote += f" Всего на карточке линейки ~{pool:,} отзывов (другие варианты).".replace(",", " ")
             entry={"id":f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}","platform":data["platform"],
                    "analyzed":today(),"requested_by":who or "","name":data["name"],"brand":data.get("brand",""),
                    "url":data["url"],"photo":data.get("photo"),"price":(int(data["price"]) if data.get("price") else None),
@@ -932,10 +950,7 @@ def process_one():
                    "reviews_total":rt,"stars":data.get("stars"),
                    "stars_collected":data.get("stars_collected"),
                    "skleyka_reviews_count":data.get("skleyka_reviews_count"),
-                   "stars_note":(
-                       (f"Ozon не даёт число отзывов по одному товару — показано {data.get('stars_collected') or rt} реально собранных по этому SKU"
-                        + (f" (в общей группе вариантов всего ~{int(data['skleyka_reviews_count']):,} отзывов)".replace(","," ") if data.get("skleyka_reviews_count") else "")
-                        + ".") if data["platform"]=="OZ" and data.get("stars_collected") else ""),
+                   "stars_note": _snote,
                    "neg_total": neg_total,
                    "neg_share": (f"{round(neg_total/rt*100,1)}%".replace(".0%","%") if rt else ""),
                    "skleyka": data.get("skleyka") or [],
