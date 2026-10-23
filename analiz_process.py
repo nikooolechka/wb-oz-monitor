@@ -933,16 +933,22 @@ def process_one():
                     try: return f"{d[8:10]}.{d[5:7]}.{d[0:4]}"
                     except Exception: return d[:10]
                 processed_period = f"{_fmt(pdates[0])} – {_fmt(pdates[-1])}"
-            # Пометка про отзывы (OZ): честный 0 ИЛИ «показаны все N по этому артикулу (+ сколько в линейке)».
+            # Пометка про отзывы (OZ). Ozon режет пагинацию пула склейки ~1000 (CAP) — для больших
+            # склеек собрать ВСЕ отзывы варианта нельзя (ограничение Ozon, не баг). Отличаем:
+            # пул < CAP → собрали всё, можно писать «все N»; пул упёрся в CAP → честно «ограниченный пул».
             pool = int(data.get("reviews_pool_total") or 0)
+            CAP = 950
             _snote = ""
             if data["platform"] == "OZ":
                 if rt == 0 and pool > 0:
                     _snote = "0 собственных отзывов по этому варианту — все отзывы на карточке относятся к другим вариантам линейки."
+                elif rt and pool >= CAP:
+                    _snote = (f"Проанализировано {rt} отзывов по этому варианту (по его ID). "
+                              "У товара большая склейка — Ozon отдаёт ограниченный пул отзывов и собрать все по варианту не позволяет.")
                 elif rt:
                     _snote = f"Показаны ВСЕ {rt} отзывов по этому артикулу (по его ID на Ozon)."
                     if pool > rt:
-                        _snote += f" Всего на карточке линейки ~{pool:,} отзывов (другие варианты).".replace(",", " ")
+                        _snote += f" Всего в склейке ~{pool:,} собранных отзывов (другие варианты).".replace(",", " ")
             entry={"id":f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}","platform":data["platform"],
                    "analyzed":today(),"requested_by":who or "","name":data["name"],"brand":data.get("brand",""),
                    "url":data["url"],"photo":data.get("photo"),"price":(int(data["price"]) if data.get("price") else None),
