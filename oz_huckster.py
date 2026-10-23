@@ -9,8 +9,8 @@ import google.auth.transport.requests as gtr
 
 CTX = ssl._create_unverified_context()
 HBASE = "https://wbs.e-teleport.ru"
-HUSER = os.environ.get("HUCKSTER_USER", "andrianov-vladimir@yandex.ru")
-HPASS = os.environ.get("HUCKSTER_PASS", "Dkflbvbh 555556")
+HUSER = os.environ.get("HUCKSTER_USER", "")
+HPASS = os.environ.get("HUCKSTER_PASS", "")
 OZ_SHOP = "189077_FBO"
 SHEET = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"  # АС ФАРМ клод код
 TAB = "oz_цены"
