@@ -14,6 +14,12 @@ HPASS = os.environ.get("HUCKSTER_PASS", "Dkflbvbh 555556")
 OZ_SHOP = "189077_FBO"
 SHEET = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"  # АС ФАРМ клод код
 TAB = "oz_цены"
+# (marketplace Huckster, shop_id, вкладка-архив). Пишем цену С КАРТОЙ/КОШЕЛЬКОМ (market_card_price).
+MARKETS = [
+    ("ozon", "189077_FBO", "oz_цены"),
+    ("wildberries", "1884480", "wb_цены"),
+    ("yandex", "22610087", "ym_цены"),
+]
 STATE_TAB = "oz_alert_state"
 KEEP_DAYS = 14
 
@@ -44,16 +50,19 @@ def _hpost(path, body):
     resp = urllib.request.urlopen(r, context=CTX, timeout=30)
     return resp
 
-def huckster_oz_cards():
+def huckster_session():
     h = _hpost("/md5", {"input": HPASS}).read().decode()
     resp = _hpost("/auth/credentials", {"userName": HUSER, "password": h})
     sc = resp.getheader("Set-Cookie")
     sid = re.search(r"ss-id=([^;]+)", sc).group(1)
     pid = re.search(r"ss-pid=([^;]+)", sc).group(1)
+    return {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0",
+            "Cookie": f"ss-id={sid}; ss-pid={pid}"}
+
+def huckster_cards(H, mp, shop):
     r = urllib.request.Request(HBASE + "/markets/integrations/repricer/items/list",
-        data=json.dumps({"marketplace": "ozon", "shop_id": OZ_SHOP, "limit": 200, "offset": 0}).encode(),
-        headers={"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "Mozilla/5.0",
-                 "Cookie": f"ss-id={sid}; ss-pid={pid}"}, method="POST")
+        data=json.dumps({"marketplace": mp, "shop_id": shop, "limit": 200, "offset": 0}).encode(),
+        headers=H, method="POST")
     items = json.loads(urllib.request.urlopen(r, context=CTX, timeout=30).read()).get("result", [])
     out = {}
     for it in items:
@@ -182,35 +191,28 @@ def check_alerts(cards):
          {"values": [[json.dumps({"day_status": day_status, "night": night, "summary_date": summary_date}, ensure_ascii=False)]]})
     print(f"[OK] отправлено сообщений: {sent} (час {h} МСК, {'ночь' if is_night else 'день'})")
 
-def main():
-    cards = huckster_oz_cards()
-    if not cards:
-        print("[WARN] Huckster не отдал цены Ozon — выхожу без записи"); return
-    check_alerts(cards)
-    sid = ensure_tab(TAB)
-    rows = read_vals(f"{TAB}!A1:ZZ10000")
+def record(cards, tab):
+    """Снимок цен во вкладку tab + катим историю 2 недели (старые строки сверху удаляем)."""
+    sid = ensure_tab(tab)
+    rows = read_vals(f"{tab}!A1:ZZ10000")
     header = rows[0] if rows else []
     if not header:
         header = ["дата-время"] + sorted(cards.keys())
-        gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(TAB+'!A1')}?valueInputOption=RAW",
+        gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(tab+'!A1')}?valueInputOption=RAW",
              {"values": [header]})
-        rows = [header]
-    # авто-добавление новых товаров как колонок
     new_cols = [t for t in sorted(cards) if t not in header]
     if new_cols:
         header = header + new_cols
-        gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(TAB+'!A1')}?valueInputOption=RAW",
+        gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(tab+'!A1')}?valueInputOption=RAW",
              {"values": [header]})
-        print("[INFO] новые товары-колонки:", new_cols)
-    # строка-снимок в порядке header
+        print(f"[INFO] {tab}: новые товары-колонки: {new_cols}")
     ts = msk().strftime("%Y-%m-%d %H:%M")
     row = [ts] + [cards.get(h, "") for h in header[1:]]
-    gapi("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(TAB+'!A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+    gapi("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(tab+'!A1')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
          {"values": [row]})
-    print(f"[OK] записан снимок {ts}: товаров {len(cards)}")
-    # удаление строк старше KEEP_DAYS (самые старые — сверху, после заголовка)
+    print(f"[OK] {tab}: снимок {ts}, товаров {len(cards)}")
     cutoff = (msk() - datetime.timedelta(days=KEEP_DAYS)).strftime("%Y-%m-%d %H:%M")
-    rows = read_vals(f"{TAB}!A1:A10000")
+    rows = read_vals(f"{tab}!A1:A10000")
     old = 0
     for r in rows[1:]:
         if r and r[0] and r[0] < cutoff:
@@ -220,7 +222,20 @@ def main():
     if old:
         gapi("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}:batchUpdate",
             {"requests": [{"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + old}}}]})
-        print(f"[OK] удалено старых строк (>{KEEP_DAYS} дн): {old}")
+        print(f"[OK] {tab}: удалено старых строк (>{KEEP_DAYS} дн): {old}")
+
+def main():
+    H = huckster_session()
+    for mp, shop, tab in MARKETS:
+        try:
+            cards = huckster_cards(H, mp, shop)
+        except Exception as e:
+            print(f"[WARN] {mp}: ошибка Huckster: {e}"); continue
+        if not cards:
+            print(f"[WARN] {mp}: нет цен — пропуск"); continue
+        if mp == "ozon":
+            check_alerts(cards)          # вилки/алерты пока только по Ozon
+        record(cards, tab)
 
 if __name__ == "__main__":
     main()
