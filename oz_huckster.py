@@ -113,9 +113,18 @@ def notify(text):
 def alert_text(name, cur, lo, hi):
     d = f"↓ ниже минимума на {lo-cur} ₽" if cur < lo else f"↑ выше максимума на {cur-hi} ₽"
     return (f"<b>❗️Ozon — цена вышла за допустимый диапазон</b>\n\n"
-            f"<b>{name}</b> (с картой Ozon)\n"
+            f"<b>{name}</b>\n"
             f"сейчас: <b>{cur} ₽</b>\n"
             f"допустимо: {lo}–{hi} ₽\n{d}")
+
+def _dirstr(c, lo, hi):
+    return f"↓ на {lo-c} ₽" if c < lo else f"↑ на {c-hi} ₽"
+
+def combined_text(items):
+    """>2 товаров за раз -> одно сообщение со свёрнутым (раскрывающимся) списком."""
+    lines = [f"• <b>{n}</b>: {c} ₽ — вилка {lo}–{hi}, {_dirstr(c,lo,hi)}" for (n, c, lo, hi, stt) in items]
+    return (f"<b>❗️Ozon — {len(items)} товаров вышли за допустимый диапазон</b>\n"
+            f"<blockquote expandable>" + "\n".join(lines) + "</blockquote>")
 
 def _cur_status():
     """{товар: (status, cur, lo, hi)} по текущим ценам (только те, что есть)."""
@@ -144,7 +153,10 @@ def morning_summary(night, cur):
             where = "всё ещё ниже" if now[0] == "below" else "всё ещё выше"
             tail = f"сейчас {now[1]} ₽ — {where}"
         lines.append(f"• <b>{name}</b>: ночью {rec['worst']} ₽ (вилка {lo}–{hi}) → {tail}")
-    return "<b>❗️Ozon — за ночь были цены вне диапазона</b>\n\n" + "\n".join(lines)
+    head = f"<b>❗️Ozon — за ночь {len(lines)} цен вне диапазона</b>\n"
+    if len(lines) > 2:
+        return head + "<blockquote expandable>" + "\n".join(lines) + "</blockquote>"
+    return head + "\n" + "\n".join(lines)
 
 def check_alerts(cards):
     ensure_tab(STATE_TAB)
@@ -180,13 +192,21 @@ def check_alerts(cards):
             night = {}
             day_status = {n: s[0] for n, s in cur.items()}    # без индивидуальных алертов на сводочном прогоне
         else:
-            # индивидуальный алерт по каждому товару при выходе за вилку (один раз на событие)
+            # собираем НОВЫЕ выходы за вилку (один раз на событие)
+            newly = []
             for name, (stt, c, lo, hi) in cur.items():
                 old = day_status.get(name, "ok")
                 if stt != old and stt != "ok":
+                    newly.append((name, c, lo, hi, stt))
+                day_status[name] = stt
+            if len(newly) > 2:
+                # больше двух за раз -> одно свёрнутое сообщение (как дайджест)
+                notify(combined_text(newly)); sent = 1
+                print(f"[ALERT-COMBINED] {len(newly)} товаров вне вилки", flush=True)
+            else:
+                for (name, c, lo, hi, stt) in newly:
                     notify(alert_text(name, c, lo, hi)); sent += 1
                     print(f"[ALERT] {name}: {c} вне {lo}-{hi} ({stt})", flush=True)
-                day_status[name] = stt
     gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(STATE_TAB+'!A1')}?valueInputOption=RAW",
          {"values": [[json.dumps({"day_status": day_status, "night": night, "summary_date": summary_date}, ensure_ascii=False)]]})
     print(f"[OK] отправлено сообщений: {sent} (час {h} МСК, {'ночь' if is_night else 'день'})")
