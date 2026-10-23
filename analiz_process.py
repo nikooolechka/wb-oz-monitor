@@ -238,7 +238,7 @@ def wb_price_pc(nm, timeout=300):
             except Exception: return None
     return None
 
-def oz_collect(pid, timeout=420):
+def oz_collect(pid, timeout=420, url=None):
     # Если ПК сейчас не отвечает (сессия упала) — НЕ кидаем команду вхолостую. На маке уже крутится
     # сторож com.asfarm.pcwatch, который сам следит за heartbeat A4 и сам поднимает сессию ПК через
     # RDP, если та упала (реагирует после ~25 мин простоя). Мы его не трогаем и не дублируем — просто
@@ -251,9 +251,16 @@ def oz_collect(pid, timeout=420):
         else:
             return {"_pc_down": True}
 
+    # Передаём ПОЛНЫЙ путь карточки с ЧПУ-названием (/product/<slug>-<sku>/) — он однозначно
+    # указывает на нужный вариант, Ozon по нему не подменяет товар. Чистим от query и опасных
+    # для командной строки символов (берём только путь, без ? и #; в slug только латиница/цифры/-).
+    arg = str(pid)
+    if url:
+        mu = re.search(r"/product/([A-Za-z0-9\-]*\d{6,})/?", url)
+        if mu: arg = "/product/" + mu.group(1) + "/"
     swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
            "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/oz_card_pc.py' -OutFile \"$d\\oz_card_pc.py\";"
-           f"& $py \"$d\\oz_card_pc.py\" {pid} 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
+           f"& $py \"$d\\oz_card_pc.py\" \"{arg}\" 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
     start=time.time()
     while time.time()-start<timeout:
         time.sleep(15)
@@ -679,33 +686,62 @@ def card_png(d, path):
             oldn=f"{int(d['price_old']):,}".replace(","," ")+" ₽"
             ox=nx+22; dr.text((ox,ry+14),oldn,font=_font(400,26),fill=(120,135,150))
             ow=dr.textlength(oldn,font=_font(400,26)); dr.line([(ox,ry+28),(ox+ow,ry+28)],fill=(120,135,150),width=2)
+    # ── НИЖНЯЯ ПЛАШКА — ФИКСИРОВАННАЯ 1/4 КАРТИНКИ, НЕ ЕРЗАЕТ (владелец, 23.10.2026) ──
+    bx0,bx1=PAD,W-PAD
+    PANEL_H=H//4                      # ровно четверть картинки
+    PANEL_BM=30                       # отступ снизу
+    panel_top=H-PANEL_H-PANEL_BM      # всегда одно и то же место
+    panel_bot=panel_top+PANEL_H
+    # Контент сверху (кто покупает / чем цепляет) рисуем ТОЛЬКО до плашки; если не влезает —
+    # сокращаем текст (меньше строк), а плашку НЕ двигаем.
+    content_limit=panel_top-14
     by=py+PS+44
     dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=24
     dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,21),fill=(46,230,200)); by+=32
     for ln in wrap(d.get("ca",""),_font(400,26),W-2*PAD)[:2]:
+        if by+30>content_limit: break
         dr.text((PAD,by),ln,font=_font(400,26),fill=(206,220,230)); by+=34
     by+=12
-    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
-    for t in (d.get("seller_claims") or [])[:3]:
-        dr.ellipse([PAD+2,by+11,PAD+11,by+20],fill=(46,230,200))
-        for ln in wrap(t,_font(400,25),W-2*PAD-28)[:2]:
-            dr.text((PAD+26,by),ln,font=_font(400,25),fill=(234,242,247)); by+=33
-        by+=6
-    by+=12; bx0,bx1=PAD,W-PAD; bh=H-40-by; stars=d.get("stars")
+    if by+30<=content_limit:
+        dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
+        claims=[t for t in (d.get("seller_claims") or [])[:3] if t]
+        n=len(claims) or 1
+        avail=content_limit-by
+        # сколько места на пункт. Если на 2 строки каждому не хватает — даём по 1 строке
+        # (текст сокращаем с «…»), чтобы ПОКАЗАТЬ ВСЕ пункты, а не выкидывать и не двигать плашку.
+        per=avail/n
+        two_lines = per>=(2*33+6)
+        fclaim=_font(400,25)
+        def _one_line(t):
+            lns=wrap(t,fclaim,W-2*PAD-28)
+            if len(lns)<=1: return lns[0] if lns else ""
+            s=lns[0]
+            while s and dr.textlength(s+"…",font=fclaim)>W-2*PAD-28: s=s[:-1]
+            return s+"…"
+        for t in claims:
+            if by+30>content_limit: break
+            dr.ellipse([PAD+2,by+11,PAD+11,by+20],fill=(46,230,200))
+            lns = wrap(t,fclaim,W-2*PAD-28)[:2] if two_lines else [_one_line(t)]
+            if len(lns)==2 and by+2*33>content_limit: lns=[_one_line(t)]
+            for ln in lns:
+                if by+30>content_limit: break
+                dr.text((PAD+26,by),ln,font=fclaim,fill=(234,242,247)); by+=33
+            by+=6
+    # панель на фиксированном месте
+    by=panel_top; bh=PANEL_H; stars=d.get("stars")
     pan=Image.new("RGBA",(W,H),(0,0,0,0))
     ImageDraw.Draw(pan).rounded_rectangle([bx0,by,bx1,by+bh],24,fill=(255,255,255,12),outline=(255,255,255,26),width=1)
     img.paste(Image.alpha_composite(img.convert("RGBA"),pan).convert("RGB"),(0,0)); dr=ImageDraw.Draw(img)
-    iy=by+20; ix=bx0+26
+    iy=by+18; ix=bx0+26
     if stars and sum(stars.values())>0:
         dr.text((ix,iy),"ОЦЕНКИ ПОКУПАТЕЛЕЙ",font=_font(700,20),fill=(46,230,200))
         if d.get("stars_collected") and d["stars_collected"]<d.get("reviews_total",0):
             dr.text((bx1-26,iy),f"собрано {d['stars_collected']}/{d['reviews_total']}".replace(",",""),font=_font(400,19),anchor="ra",fill=(142,163,180))
-        iy+=42
+        iy+=38
         rows=[(k,stars.get(k,0)) for k in ("5","4","3","2","1")]; mx=max(1,*[c for _,c in rows])
         colors={"5":(72,229,155),"4":(46,230,200),"3":(255,210,63),"2":(255,150,80),"1":(255,107,125)}
-        # Высота строки: комфортная 46, но НЕ больше доступного места (не растягиваем на полкарты
-        # при коротком тексте выше) и ужимается только если реально тесно (не вылезаем за край).
-        tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=min(46,(by+bh-iy-14)/5)
+        # 5 строк РОВНО в фиксированную панель — высота строки считается от её размера.
+        tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=(by+bh-iy-12)/5
         for k,c in rows:
             cyr=iy+rowh/2
             dr.text((ix,cyr),k,font=_font(700,24),anchor="lm",fill=colors[k]); _star(dr,ix+26+11,cyr+1,11,(255,210,63))
@@ -715,12 +751,18 @@ def card_png(d, path):
             dr.text((bx1-26,cyr),f"{c:,}".replace(","," ")+" отз.",font=_font(700,22),anchor="rm",fill=(234,242,247))
             iy+=rowh
     else:
-        dr.text((ix,iy),"ГЛАВНОЕ ИЗ ОТЗЫВОВ",font=_font(700,20),fill=(46,230,200)); iy+=42
+        dr.text((ix,iy),"ГЛАВНОЕ ИЗ ОТЗЫВОВ",font=_font(700,20),fill=(46,230,200)); iy+=38
         pr=(d.get("praise") or [""])[0]; cp=(d.get("complaints") or [{}])[0].get("t","")
         dr.text((ix,iy),"За что хвалят:",font=_font(700,20),fill=(72,229,155)); iy+=30
-        for ln in wrap(pr,_font(400,24),bx1-ix-26)[:2]: dr.text((ix,iy),ln,font=_font(400,24),fill=(234,242,247)); iy+=31
-        iy+=14; dr.text((ix,iy),"Главная жалоба:",font=_font(700,20),fill=(255,107,125)); iy+=30
-        for ln in wrap(cp,_font(400,24),bx1-ix-26)[:3]: dr.text((ix,iy),ln,font=_font(400,24),fill=(255,220,224)); iy+=31
+        for ln in wrap(pr,_font(400,24),bx1-ix-26)[:2]:
+            if iy+28>panel_bot-10: break
+            dr.text((ix,iy),ln,font=_font(400,24),fill=(234,242,247)); iy+=31
+        iy+=12
+        if iy+28<=panel_bot-10:
+            dr.text((ix,iy),"Главная жалоба:",font=_font(700,20),fill=(255,107,125)); iy+=30
+            for ln in wrap(cp,_font(400,24),bx1-ix-26)[:3]:
+                if iy+28>panel_bot-10: break
+                dr.text((ix,iy),ln,font=_font(400,24),fill=(255,220,224)); iy+=31
     img.save(path,"PNG")
 
 # ---------- Обновление дашборда (docs/analiz_data.json в pages-репо) ----------
@@ -778,7 +820,7 @@ def process_one():
     try:
         if re.search(r"ozon\.", url):
             m=re.search(r"/product/[^/]*?(\d{6,})", url) or re.search(r"(\d{6,})", url)
-            data=oz_collect(m.group(1)) if m else None
+            data=oz_collect(m.group(1), url=url) if m else None
         elif re.search(r"wildberries\.|\.wb\.ru", url):
             m=re.search(r"/catalog/(\d+)", url)
             data=wb_collect(m.group(1)) if m else None
@@ -798,11 +840,10 @@ def process_one():
             data=None
         elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
-        elif not data.get("stars") and not (data.get("reviews_total") or 0):
-            # Защита от "собрал абы как" (владелец, 23.10.2026): название/цену собрать МОГЛИ,
-            # а отзывы/рейтинг — нет (антибот, занятый/сломанный браузер и т.п.). Без реальных
-            # отзывов ИИ напишет честную на вид, но ложную "жалоб не выявлено" — хуже честного
-            # отказа. Публикуем ТОЛЬКО если отзывы реально прочитаны (хоть сколько-то).
+        elif not (data.get("stars") and sum(int(v or 0) for v in data["stars"].values())>0) or not data.get("rating"):
+            # Карточка ПУБЛИКУЕТСЯ только с рейтингом И разбивкой по звёздам (владелец, 23.10.2026:
+            # без рейтинга/отзывов — недопустимо). Нет звёзд/рейтинга = сбой сборщика (антибот/
+            # занятый браузер), а не "отзывов нет" → честный отказ, не рисуем пустую карточку.
             tg_msg(chat,"👻УПС - что то сломалось\nСобрал карточку, но не смог собрать отзывы/рейтинг. Пришли ссылку ещё раз чуть позже.")
             tg_msg(OWNER_CHAT,"бот аналитик сломался, нужна починка")
             data=None
