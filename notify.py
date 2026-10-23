@@ -8,8 +8,14 @@ from __future__ import annotations
 
 import os
 import time
+import datetime
 
 import requests
+
+
+def _silent() -> bool:
+    """В выходные (сб/вс по МСК) все алерты доставляем БЕЗ звука (владелец 2026-10-23)."""
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=3)).weekday() >= 5
 
 # .strip() — секреты часто копируют с лишним переносом строки/пробелом,
 # из-за чего адрес Telegram становится битым (bot<token>%0A) → 404.
@@ -26,6 +32,7 @@ def _send_chunk(text: str) -> None:
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
+            "disable_notification": _silent(),
         },
         timeout=30,
     )
