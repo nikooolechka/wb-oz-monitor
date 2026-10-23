@@ -1,0 +1,24 @@
+name: oz_huckster_prices
+on:
+  schedule:
+    - cron: "5 * * * *"   # каждый час :05 — Ozon в Huckster обновляется раз в час
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: oz-huckster
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install google-auth
+      - env:
+          HUCKSTER_USER: ${{ secrets.HUCKSTER_USER }}
+          HUCKSTER_PASS: ${{ secrets.HUCKSTER_PASS }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+        run: python oz_huckster.py
