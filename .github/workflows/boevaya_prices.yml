@@ -16,9 +16,9 @@ jobs:
       - env:
           HUCKSTER_USER: ${{ secrets.HUCKSTER_USER }}
           HUCKSTER_PASS: ${{ secrets.HUCKSTER_PASS }}
-          WB_TOKEN: ${{ secrets.WB_TOKEN }}
           OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
           OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           YM_KEY: ${{ secrets.YM_KEY }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          SKIP_WB_API: "1"
         run: python boevaya_write.py
