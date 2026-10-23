@@ -21,4 +21,6 @@ jobs:
           HUCKSTER_USER: ${{ secrets.HUCKSTER_USER }}
           HUCKSTER_PASS: ${{ secrets.HUCKSTER_PASS }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python oz_huckster.py
