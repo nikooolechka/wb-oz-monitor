@@ -282,6 +282,7 @@ def oz_collect(pid, timeout=420, url=None):
                             "price_old":d.get("price_old"),"rating":d.get("rating"),
                             "reviews_total":d.get("reviews_all") or d.get("stars_collected") or 0,
                             "skleyka_reviews_count":d.get("skleyka_reviews_count"),
+                            "skleyka":d.get("skleyka") or [],
                             "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
                             "photo":(d.get("gallery") or [None])[0],"description":"","sostav":"",
                             "reviews":d.get("reviews") or []}
