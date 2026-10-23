@@ -262,6 +262,10 @@ def oz_collect(pid, timeout=420):
         if m:
             try:
                 d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
+                if d.get("_sku_mismatch"):
+                    # Ozon упорно отдаёт ДРУГОЙ вариант группы вместо запрошенного — анализировать
+                    # под именем запрошенного нельзя (иначе два разных товара дадут один отчёт).
+                    return {"_wrong_variant": True, "served": d.get("_sku_mismatch")}
                 if d.get("name"):
                     # reviews_total по товару = РЕАЛЬНО собранные по ЭТОМУ SKU (reviews_all),
                     # НЕ склеечный счётчик: 15823 — отзывы на всю ГРУППУ вариантов (банан/без
@@ -676,22 +680,22 @@ def card_png(d, path):
             ox=nx+22; dr.text((ox,ry+14),oldn,font=_font(400,26),fill=(120,135,150))
             ow=dr.textlength(oldn,font=_font(400,26)); dr.line([(ox,ry+28),(ox+ow,ry+28)],fill=(120,135,150),width=2)
     by=py+PS+44
-    dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=22
-    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,20),fill=(46,230,200)); by+=29
-    for ln in wrap(d.get("ca",""),_font(400,23),W-2*PAD)[:2]:
-        dr.text((PAD,by),ln,font=_font(400,23),fill=(206,220,230)); by+=30
-    by+=10
-    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,20),fill=(46,230,200)); by+=32
+    dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=24
+    dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,21),fill=(46,230,200)); by+=32
+    for ln in wrap(d.get("ca",""),_font(400,26),W-2*PAD)[:2]:
+        dr.text((PAD,by),ln,font=_font(400,26),fill=(206,220,230)); by+=34
+    by+=12
+    dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
     for t in (d.get("seller_claims") or [])[:3]:
-        dr.ellipse([PAD+2,by+9,PAD+10,by+17],fill=(46,230,200))
-        for ln in wrap(t,_font(400,22),W-2*PAD-26)[:2]:
-            dr.text((PAD+24,by),ln,font=_font(400,22),fill=(234,242,247)); by+=28
-        by+=4
-    by+=10; bx0,bx1=PAD,W-PAD; bh=H-40-by
+        dr.ellipse([PAD+2,by+11,PAD+11,by+20],fill=(46,230,200))
+        for ln in wrap(t,_font(400,25),W-2*PAD-28)[:2]:
+            dr.text((PAD+26,by),ln,font=_font(400,25),fill=(234,242,247)); by+=33
+        by+=6
+    by+=12; bx0,bx1=PAD,W-PAD; bh=H-40-by; stars=d.get("stars")
     pan=Image.new("RGBA",(W,H),(0,0,0,0))
     ImageDraw.Draw(pan).rounded_rectangle([bx0,by,bx1,by+bh],24,fill=(255,255,255,12),outline=(255,255,255,26),width=1)
     img.paste(Image.alpha_composite(img.convert("RGBA"),pan).convert("RGB"),(0,0)); dr=ImageDraw.Draw(img)
-    iy=by+20; ix=bx0+26; stars=d.get("stars")
+    iy=by+20; ix=bx0+26
     if stars and sum(stars.values())>0:
         dr.text((ix,iy),"ОЦЕНКИ ПОКУПАТЕЛЕЙ",font=_font(700,20),fill=(46,230,200))
         if d.get("stars_collected") and d["stars_collected"]<d.get("reviews_total",0):
@@ -699,7 +703,9 @@ def card_png(d, path):
         iy+=42
         rows=[(k,stars.get(k,0)) for k in ("5","4","3","2","1")]; mx=max(1,*[c for _,c in rows])
         colors={"5":(72,229,155),"4":(46,230,200),"3":(255,210,63),"2":(255,150,80),"1":(255,107,125)}
-        tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=(by+bh-iy-14)/5
+        # Высота строки: комфортная 46, но НЕ больше доступного места (не растягиваем на полкарты
+        # при коротком тексте выше) и ужимается только если реально тесно (не вылезаем за край).
+        tx0=ix+66; tx1=bx1-26-150; tw=tx1-tx0; rowh=min(46,(by+bh-iy-14)/5)
         for k,c in rows:
             cyr=iy+rowh/2
             dr.text((ix,cyr),k,font=_font(700,24),anchor="lm",fill=colors[k]); _star(dr,ix+26+11,cyr+1,11,(255,210,63))
@@ -785,6 +791,10 @@ def process_one():
             data=None
         if data and data.get("_pc_down"):
             tg_msg(chat,"Удалённый ПК сейчас недоступен (нужен для сбора с Ozon) — попробуй прислать ссылку чуть позже.")
+            data=None
+        elif data and data.get("_wrong_variant"):
+            tg_msg(chat,"👻УПС - Ozon сейчас открывает по этой ссылке другой вариант товара, а не запрошенный. Чтобы не выдать анализ не того товара, не публикую. Пришли ссылку ещё раз чуть позже.")
+            tg_msg(OWNER_CHAT,"бот аналитик: Ozon подменил вариант товара, не опубликовал")
             data=None
         elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
