@@ -263,9 +263,14 @@ def oz_collect(pid, timeout=420):
             try:
                 d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
                 if d.get("name"):
+                    # reviews_total по товару = РЕАЛЬНО собранные по ЭТОМУ SKU (reviews_all),
+                    # НЕ склеечный счётчик: 15823 — отзывы на всю ГРУППУ вариантов (банан/без
+                    # вкуса/земляника/дюшес…), а не на конкретный товар (владелец, 23.10.2026).
                     return {"platform":"OZ","pid":pid,"url":f"https://www.ozon.ru/product/{pid}/",
                             "name":d.get("name"),"brand":"","price":d.get("price_card") or d.get("price"),
-                            "price_old":d.get("price_old"),"rating":d.get("rating"),"reviews_total":d.get("reviews_count"),
+                            "price_old":d.get("price_old"),"rating":d.get("rating"),
+                            "reviews_total":d.get("reviews_all") or d.get("stars_collected") or 0,
+                            "skleyka_reviews_count":d.get("skleyka_reviews_count"),
                             "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
                             "photo":(d.get("gallery") or [None])[0],"description":"","sostav":"",
                             "reviews":d.get("reviews") or []}
@@ -658,7 +663,10 @@ def card_png(d, path):
     if d.get("rating"): dr.text((cx,cy),str(d["rating"]),font=_font(700,30),anchor="lm",fill=(255,210,63))
     ry+=60
     if d.get("reviews_total"):
-        dr.text((rx,ry),f"{d['reviews_total']:,}".replace(","," ")+" отзывов на товар",font=_font(400,25),fill=(142,163,180)); ry+=46
+        # На Ozon число по одному SKU недоступно → это СОБРАННЫЕ по товару (не склеечные 15k);
+        # на WB reviews_total — точное per-nm из nmValuationDistribution.
+        rlabel = (" отзывов собрано" if d.get("platform")=="OZ" else " отзывов на товар")
+        dr.text((rx,ry),f"{d['reviews_total']:,}".replace(","," ")+rlabel,font=_font(400,25),fill=(142,163,180)); ry+=46
     if d.get("price"):
         num=f"{int(d['price']):,}".replace(","," ")
         dr.text((rx,ry),num,font=_font(800,46),fill=(234,242,247)); nx=rx+dr.textlength(num,font=_font(800,46))+12
@@ -823,7 +831,11 @@ def process_one():
                    "price_old":(int(data["price_old"]) if data.get("price_old") else None),"rating":data.get("rating"),
                    "reviews_total":rt,"stars":data.get("stars"),
                    "stars_collected":data.get("stars_collected"),
-                   "stars_note":("Ozon не публикует полную разбивку — показано по собранным отзывам." if data["platform"]=="OZ" and data.get("stars_collected") else ""),
+                   "skleyka_reviews_count":data.get("skleyka_reviews_count"),
+                   "stars_note":(
+                       (f"Ozon не даёт число отзывов по одному товару — показано {data.get('stars_collected') or rt} реально собранных по этому SKU"
+                        + (f" (в общей группе вариантов всего ~{int(data['skleyka_reviews_count']):,} отзывов)".replace(","," ") if data.get("skleyka_reviews_count") else "")
+                        + ".") if data["platform"]=="OZ" and data.get("stars_collected") else ""),
                    "neg_total": neg_total,
                    "neg_share": (f"{round(neg_total/rt*100,1)}%".replace(".0%","%") if rt else ""),
                    "skleyka": data.get("skleyka") or [],
