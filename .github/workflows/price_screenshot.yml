@@ -30,16 +30,16 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Свежие цены (Huckster) перед скрином (без WB API — не долбить лимит)
+      - name: Свежие цены (Huckster) + ВБ до-СПП перед скрином (WB — 1 раз на окно)
         continue-on-error: true
         env:
           HUCKSTER_USER: ${{ secrets.HUCKSTER_USER }}
           HUCKSTER_PASS: ${{ secrets.HUCKSTER_PASS }}
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
           OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
           OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
           YM_KEY: ${{ secrets.YM_KEY }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
-          SKIP_WB_API: "1"
         run: pip install google-auth requests && python boevaya_write.py
       - name: Скрин цен → чат отдела (если свежие)
         env:
