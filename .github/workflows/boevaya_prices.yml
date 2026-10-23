@@ -1,0 +1,24 @@
+name: boevaya_prices
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7 * * * *"
+concurrency: boevaya_prices
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install google-auth requests pynacl
+      - env:
+          HUCKSTER_USER: ${{ secrets.HUCKSTER_USER }}
+          HUCKSTER_PASS: ${{ secrets.HUCKSTER_PASS }}
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          OZON_CLIENT_ID: ${{ secrets.OZON_CLIENT_ID }}
+          OZON_API_KEY: ${{ secrets.OZON_API_KEY }}
+          YM_KEY: ${{ secrets.YM_KEY }}
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+        run: python boevaya_write.py
