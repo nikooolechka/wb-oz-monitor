@@ -119,6 +119,13 @@ def swrite(cell,val):
         f"https://sheets.googleapis.com/v4/spreadsheets/{PULT}/values/{urllib.parse.quote(cell)}?valueInputOption=RAW",
         data=json.dumps({"values":[[val]]}).encode(), method="PUT",
         headers={"Authorization":"Bearer "+sheets_tok(),"Content-Type":"application/json"}))
+def sread_col(rng):
+    # Читает диапазон-столбец (напр. M10:M60) → список значений ячеек. Для БОЛЬШОГО канала отзывов.
+    r=urllib.request.urlopen(urllib.request.Request(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{PULT}/values/{urllib.parse.quote(rng)}",
+        headers={"Authorization":"Bearer "+sheets_tok()}))
+    v=json.loads(r.read()).get("values") or []
+    return [(row[0] if row else "") for row in v]
 
 # ---------- HTTP ----------
 def get(url, hdr=None, data=None, t=40):
@@ -283,9 +290,25 @@ def oz_collect(pid, timeout=420, url=None):
                     # под именем запрошенного нельзя (иначе два разных товара дадут один отчёт).
                     return {"_wrong_variant": True, "served": d.get("_sku_mismatch")}
                 if d.get("name"):
+                    # БОЛЬШОЙ КАНАЛ ОТЗЫВОВ: если ПК положил все отзывы в диапазон ячеек (reviews_store)
+                    # — читаем их оттуда (так проходит 1000+ отзывов полным текстом, минуя лимит A1).
+                    reviews = d.get("reviews") or []
+                    rs = d.get("reviews_store")
+                    if rs and str(rs.get("nonce"))==nonce:
+                        try:
+                            start=int(rs.get("start_row") or 10); n=int(rs.get("chunks") or 0)
+                            rows=sread_col(f"Лист1!M{start}:M{start+n-1}")
+                            parts={}
+                            for cellv in rows:
+                                mm=re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
+                                if mm and mm.group(1)==nonce: parts[int(mm.group(2))]=mm.group(3)
+                            if len(parts)==n and n>0:
+                                blob="".join(parts[i] for i in range(n))
+                                reviews=json.loads(base64.b64decode(blob).decode("utf-8"))
+                        except Exception as e:
+                            print("reviews_store read FAILED (беру что в A1):", repr(e)[:150])
                     # reviews_total по товару = РЕАЛЬНО собранные по ЭТОМУ SKU (reviews_all),
-                    # НЕ склеечный счётчик: 15823 — отзывы на всю ГРУППУ вариантов (банан/без
-                    # вкуса/земляника/дюшес…), а не на конкретный товар (владелец, 23.10.2026).
+                    # НЕ склеечный счётчик (15823 — на всю ГРУППУ вариантов, не на товар).
                     return {"platform":"OZ","pid":pid,"url":f"https://www.ozon.ru/product/{pid}/",
                             "name":d.get("name"),"brand":"","price":d.get("price_card") or d.get("price"),
                             "price_old":d.get("price_old"),"rating":d.get("rating"),
@@ -295,7 +318,7 @@ def oz_collect(pid, timeout=420, url=None):
                             "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
                             "photo":(d.get("gallery") or [None])[0],
                             "description":d.get("content_for_analysis") or "","sostav":"",
-                            "reviews":d.get("reviews") or []}
+                            "reviews":reviews}
                 return None
             except Exception: return None
     return None
@@ -374,6 +397,12 @@ def claude_analyze(data):
            for r in revs if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
     neg_month = [(str(r.get("s")) + "★ " + ((r.get("t") or "") + " " + (r.get("m") or "")).strip())
                  for r in revs_month if r.get("s") and r.get("s") <= 3 and (r.get("t") or r.get("m"))]
+    # В ПРОМПТ ИИ уходит крупная выборка (чтобы запрос на 1000+ отзывов не раздулся), а ЧИСЛА
+    # (сколько жалоб/похвал по теме) код считает ниже по ВСЕМ отзывам (_enforce_scale) — поэтому
+    # выборка не занижает цифры (владелец, 23.10.2026: «1000 отзывов — все обрабатывать»).
+    PROMPT_CAP = 400
+    pos_s = pos[:PROMPT_CAP]
+    neg_s = neg[:PROMPT_CAP]
     prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно». Будь ИСЧЕРПЫВАЮЩИМ — не сокращай список, если есть о чём писать: распиши ВСЕ заметные темы жалоб (а не только 1-2 главные), дай МИНИМУМ 5-7 пунктов в "ideal" (упаковка, инфографика, позиционирование, контроль качества, доп-SKU и т.д.) — пустой/короткий ответ хуже длинного и подробного.
 
 🚫 ЖЕЛЕЗНОЕ ПРАВИЛО ТОЧНОСТИ (ошибка тут бьёт по прибыли компании, недопустима):
@@ -389,8 +418,8 @@ def claude_analyze(data):
 РЕЙТИНГ: {data.get('rating')} | ВСЕГО ОТЗЫВОВ: {total}
 СОСТАВ: {data.get('sostav')}
 ОПИСАНИЕ ПРОДАВЦА: {(data.get('description') or '')[:1500]}
-ПОХВАЛА ИЗ ОТЗЫВОВ: {json.dumps(pos, ensure_ascii=False)}
-ЖАЛОБЫ ИЗ ОТЗЫВОВ ({len(neg)} шт): {json.dumps(neg, ensure_ascii=False)}
+ПОХВАЛА ИЗ ОТЗЫВОВ (выборка {len(pos_s)} из {len(pos)}): {json.dumps(pos_s, ensure_ascii=False)}
+ЖАЛОБЫ ИЗ ОТЗЫВОВ (выборка {len(neg_s)} из всего {len(neg)} — темы бери отсюда, числа посчитаются по всем): {json.dumps(neg_s, ensure_ascii=False)}
 
 УЖЕ ИСПОЛЬЗУЕМЫЕ НА ДАШБОРДЕ КАТЕГОРИИ: {json.dumps(_existing_categories(), ensure_ascii=False)}
 Для поля "category" — если товар подходит под одну из них, используй ЕЁ ДОСЛОВНО (не создавай почти-дубль с другой формулировкой). Если не подходит ни одна — придумай новую короткую категорию в том же стиле (2-4 слова, по-русски, тип товара как его понял бы покупатель — напр. "Интимная гигиена", "Детские денталы", "Жидкость для ирригатора", "Подгузники").
