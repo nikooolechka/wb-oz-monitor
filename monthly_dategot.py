@@ -34,13 +34,13 @@ SID_PROD="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"   # «АС ФАРМ кл
 def tg_msg(text):
     try:
         t=os.environ["TELEGRAM_BOT_TOKEN"].strip(); c=os.environ["TELEGRAM_CHAT_ID"].strip()
-        body=urllib.parse.urlencode({"chat_id":c,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true"}).encode()
+        body=urllib.parse.urlencode({"chat_id":c,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true","disable_notification":("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
         urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage",data=body),context=CTX,timeout=25).read()
     except Exception as e: print("tg_msg err",str(e)[:120])
 def alert():
     try:
         t=os.environ["TELEGRAM_BOT_TOKEN"].strip(); c=os.environ["TELEGRAM_CHAT_ID"].strip()
-        body=urllib.parse.urlencode({"chat_id":c,"text":ALERT,"parse_mode":"HTML","disable_web_page_preview":"true"}).encode()
+        body=urllib.parse.urlencode({"chat_id":c,"text":ALERT,"parse_mode":"HTML","disable_web_page_preview":"true","disable_notification":("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
         urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage",data=body),context=CTX,timeout=25).read()
         print("АЛЕРТ отправлен в канал")
     except Exception as e: print("алерт ошибка:",str(e)[:120])
