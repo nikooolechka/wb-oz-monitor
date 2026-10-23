@@ -74,9 +74,11 @@ def _save_state(st):
 def _tg(text):
     if not (TG_TOKEN and TG_CHAT):
         print("[watchdog] нет TELEGRAM_* — сообщение не отправлено:", text, flush=True); return
+    _wk = (__import__("datetime").datetime.utcnow() + __import__("datetime").timedelta(hours=3)).weekday() >= 5  # выходные — без звука
     body = urllib.parse.urlencode({
         "chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
-        "disable_web_page_preview": "true"}).encode()
+        "disable_web_page_preview": "true",
+        "disable_notification": ("true" if _wk else "false")}).encode()
     try:
         urllib.request.urlopen(
             f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=body, timeout=30).read()
