@@ -200,6 +200,40 @@ def mp_free(mp, cats):
         out.append({**r, "opp": (r["brands"] < med_br and r["rev_per"] >= med_rp)})
     return {"parent": parent.split("/")[-1], "items": out}
 
+# ---------- фолбэк: найти категорию в дереве, если by_category пустой ----------
+_CATS_CACHE = {}
+def _all_categories(mp):
+    if mp not in _CATS_CACHE:
+        try: _CATS_CACHE[mp] = _get(f"https://mpstats.io/api/{mp}/get/categories")
+        except Exception: _CATS_CACHE[mp] = []
+    return _CATS_CACHE[mp]
+
+def _find_category(mp, itype, ictx):
+    """by_category пустой (MPStats не трекает позицию товара) ≠ категории нет. Ищем в дереве:
+    листья, чьё имя содержит слово ФОРМЫ (itype), а путь/имя — слово НАЗНАЧЕНИЯ (ictx);
+    валидируем, фетча категорию и считая совпадения по терминам товара. Берём самую «жирную»."""
+    cats = _all_categories(mp)
+    if not cats: return None
+    _stem = lambda w: re.sub(r"[ьиыяейоёъаую]+$", "", w.lower())  # гель/гели→гел, салфетки→салфетк
+    typ = [_stem(t) for t in (itype or []) if t]; ctx = [_stem(c) for c in (ictx or []) if c]
+    typ = [t for t in typ if len(t) >= 3]
+    if not typ: return None
+    cand = []
+    for c in cats:
+        nm = (c.get("name") or "").lower(); pth = (c.get("path") or "").lower()
+        if any(t in nm for t in typ) and (not ctx or any(x in pth or x in nm for x in ctx)):
+            cand.append(c.get("path"))
+    if not cand: return None
+    d1, d2, d30 = _ranges()
+    match = _mk_match(itype, ictx, [], [])
+    best = None; best_rev = 0
+    for p in cand[:8]:
+        try: data = _cat_page(mp, p, 0, 100, d30, d2)
+        except Exception: continue
+        rev = sum(x.get("revenue") or 0 for x in data if match(x.get("name")))
+        if rev > best_rev: best_rev = rev; best = p
+    return best
+
 # ---------- оркестратор ----------
 def build_mpstats(platform, sku, url, name, niche_terms):
     """platform: 'WB'/'OZ'; sku: строка; niche_terms: {label, include, exclude, aud_exclude} от ИИ.
@@ -222,6 +256,13 @@ def build_mpstats(platform, sku, url, name, niche_terms):
     itype = nt.get("include_type") or []; ictx = nt.get("include_context") or []
     exc = nt.get("exclude") or []; aud = nt.get("aud_exclude") or []
     label = nt.get("label") or ""
+    # by_category пустой ≠ категории нет (MPStats просто не трекает позицию) — ищем в дереве сами
+    if not cats and itype:
+        try:
+            fc = _find_category(mp, itype, ictx)
+            if fc: cats = [fc]; print("category fallback:", fc)
+        except Exception as e:
+            print("find_category fail:", repr(e)[:120])
     if cats and itype:
         try:
             niche, market = mp_niche(mp, str(sku), cats, itype, ictx, exc, aud, label)
