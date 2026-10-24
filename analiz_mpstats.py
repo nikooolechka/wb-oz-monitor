@@ -11,11 +11,11 @@
 - MPStats по продажам НЕДОСТОВЕРЕН (особенно склейки Ozon) — на дашборде висит красная сноска.
 Сбой любого шага НЕ должен валить карточку: все публичные вызовы обёрнуты, возвращаем что собралось.
 """
-import urllib.request, json, ssl, urllib.parse, statistics, re, datetime
+import os, urllib.request, json, ssl, urllib.parse, statistics, re, datetime
 from collections import OrderedDict, defaultdict
 
 CTX = ssl._create_unverified_context()
-TOKEN = "***REMOVED***"
+TOKEN = os.environ.get("MPSTATS_TOKEN", "")  # секрет (репо публичный — в код НЕ класть)
 MONTHS = {"01":"янв","02":"фев","03":"мар","04":"апр","05":"май","06":"июн",
           "07":"июл","08":"авг","09":"сен","10":"окт","11":"ноя","12":"дек"}
 
