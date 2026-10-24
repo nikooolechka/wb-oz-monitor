@@ -1016,16 +1016,26 @@ def process_one():
                    "processed_period": processed_period,
                    "is_stm": is_stm(data["platform"], data.get("nm") or data.get("pid"), data.get("brand",""), data.get("name","")),
                    **an}
-            # MPStats-разделы (продажи/ниша/бренды/сегменты/свободные подниши). Сбой НЕ валит карточку.
-            try:
-                from analiz_mpstats import build_mpstats
-                mpd = build_mpstats(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
-                if mpd: entry["mpstats"] = mpd
-            except Exception as _e:
-                print("mpstats build failed:", repr(_e)[:200])
-            card_png(entry, "/tmp/card.png")
-            update_dashboard(entry)
-            post_card(chat, entry, "/tmp/card.png")
+            # MPStats-разделы (продажи/ниша/бренды/сегменты/подниши) ОБЯЗАТЕЛЬНЫ для WB/Ozon —
+            # без них анализ неполный, публиковать НЕЛЬЗЯ. Долбим сбор до 3 раз (владелец, 2026-10-24).
+            mpd=None
+            for _m in range(3):
+                try:
+                    from analiz_mpstats import build_mpstats
+                    mpd = build_mpstats(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
+                except Exception as _e:
+                    print("mpstats build failed:", repr(_e)[:200]); mpd=None
+                if mpd and mpd.get("niche") and mpd.get("market") and mpd.get("sales30_u") is not None: break
+                if _m<2:
+                    print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
+            if mpd and mpd.get("niche") and mpd.get("market") and mpd.get("sales30_u") is not None:
+                entry["mpstats"]=mpd
+                card_png(entry, "/tmp/card.png")
+                update_dashboard(entry)
+                post_card(chat, entry, "/tmp/card.png")
+            else:
+                tg_msg(chat,"👻Почти готово: разобрал карточку и отзывы, но не собралась рыночная аналитика MPStats (ниша/бренды/продажи). Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
+                tg_msg(OWNER_CHAT,"бот аналитик: MPStats-разделы (ниша/бренды) не собрались после ретраев, не опубликовал (неполный анализ недопустим)")
     finally:
         q2=sread(QUEUE_CELL); rest=[x for x in q2.split("\n") if x.strip() and not x.startswith(msgid+"|")]
         swrite(QUEUE_CELL,"\n".join(rest)); swrite(BUSY_CELL,"")
