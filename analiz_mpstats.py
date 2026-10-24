@@ -78,13 +78,16 @@ def mp_item(mp, sku):
     fm = lambda dd: f"{dd[8:10]}.{dd[5:7]}"
     oos_txt = [f"{fm(a)} по {fm(b)}" if a != b else fm(a) for a, b in oos]
     # Остаток: берём ПОСЛЕДНИЙ день; если сегодня 0 (бывает артефактом) — смотрим вчера.
-    # Если и вчера 0 — товар РЕАЛЬНО не в наличии → balance_oos.
     recent = [x.get("balance") for x in s[-2:]]
     bal = None
     for b in reversed(recent):
         if b: bal = b; break
-    bal_oos = not bal
-    out = {"first_date": fd, "balance": (bal or 0), "balance_oos": bal_oos, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
+    # Различаем: MPStats вообще НЕ видит продажи (0 за все 6 мес при наличии товара = недоучёт
+    # склейки, НЕ реальный ноль) vs реальный OOS (были продажи, сейчас 0 остаток).
+    total_series = sum(x.get("sales") or 0 for x in s)
+    nodata = (total_series == 0)
+    bal_oos = (not bal) and not nodata
+    out = {"first_date": fd, "balance": (bal or 0), "balance_oos": bal_oos, "nodata": nodata, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
            "daily": daily, "daily_from": daily[0]["d"].replace("-", ".") if daily else "", "daily_to": (last30[-1]["data"][8:10] + "." + last30[-1]["data"][5:7] + "." + last30[-1]["data"][:4]) if last30 else "",
            "monthly": monthly, "months_year": "–".join(sorted(yrs)), "reviews_growth": rg, "oos": oos_txt,
            "position": None, "keywords": None, "buyout": None, "updated": d2}
