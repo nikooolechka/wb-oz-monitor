@@ -13,6 +13,7 @@
 """
 import os, urllib.request, json, ssl, urllib.parse, statistics, re, datetime
 from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 CTX = ssl._create_unverified_context()
 TOKEN = os.environ.get("MPSTATS_TOKEN", "")  # секрет (репо публичный — в код НЕ класть)
@@ -76,8 +77,14 @@ def mp_item(mp, sku):
     if cur: oos.append(cur)
     fm = lambda dd: f"{dd[8:10]}.{dd[5:7]}"
     oos_txt = [f"{fm(a)} по {fm(b)}" if a != b else fm(a) for a, b in oos]
-    bal = next((x.get("balance") for x in reversed(s) if x.get("balance")), None)
-    out = {"first_date": fd, "balance": bal, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
+    # Остаток: берём ПОСЛЕДНИЙ день; если сегодня 0 (бывает артефактом) — смотрим вчера.
+    # Если и вчера 0 — товар РЕАЛЬНО не в наличии → balance_oos.
+    recent = [x.get("balance") for x in s[-2:]]
+    bal = None
+    for b in reversed(recent):
+        if b: bal = b; break
+    bal_oos = not bal
+    out = {"first_date": fd, "balance": (bal or 0), "balance_oos": bal_oos, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
            "daily": daily, "daily_from": daily[0]["d"].replace("-", ".") if daily else "", "daily_to": (last30[-1]["data"][8:10] + "." + last30[-1]["data"][5:7] + "." + last30[-1]["data"][:4]) if last30 else "",
            "monthly": monthly, "months_year": "–".join(sorted(yrs)), "reviews_growth": rg, "oos": oos_txt,
            "position": None, "keywords": None, "buyout": None, "updated": d2}
@@ -128,12 +135,22 @@ def _mk_match(itype, ictx, exclude, aud_exclude):
 def mp_niche(mp, sku, cats, itype, ictx, exclude, aud_exclude, label):
     d1, d2, d30 = _ranges()
     match = _mk_match(itype, ictx, exclude, aud_exclude)
+    # Страницы категорий тянем ПАРАЛЛЕЛЬНО (независимые запросы) — главный выигрыш по времени.
+    clist = (cats or [])[:3]
+    tasks = [(c, s0) for c in clist for s0 in range(0, 300, 100)]
+    def _fetch(t):
+        c, s0 = t
+        try: return t, _cat_page(mp, c, s0, s0 + 100, d30, d2)
+        except Exception: return t, []
+    res = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for t, data in ex.map(_fetch, tasks):
+            res[t] = data
     pool = []; seen = set()
-    for c in (cats or [])[:3]:
+    for c in clist:
         for s0 in range(0, 300, 100):
-            try: data = _cat_page(mp, c, s0, s0 + 100, d30, d2)
-            except Exception: data = []
-            if not data: break
+            data = res.get((c, s0)) or []
+            if not data: break   # для этой категории дальше пусто — как при последовательном сборе
             for x in data:
                 if x.get("id") not in seen: seen.add(x.get("id")); pool.append(x)
     items = sorted([x for x in pool if match(x.get("name"))], key=lambda z: z.get("revenue") or 0, reverse=True)
@@ -240,18 +257,17 @@ def build_mpstats(platform, sku, url, name, niche_terms):
     Возвращает dict mpstats (per-article + niche + market) или None. Никогда не бросает."""
     mp = "wb" if platform == "WB" else ("oz" if platform == "OZ" else None)
     if not mp or not sku: return None
-    try:
-        res = mp_item(mp, str(sku)) or {}
-    except Exception as e:
-        print("mp_item fail:", repr(e)[:150]); res = {}
-    # категории товара (где он реально сидит) — из by_category, самые глубокие
-    cats = []
-    try:
-        bc = _get(f"https://mpstats.io/api/{mp}/get/item/{sku}/by_category")
-        cats = list((bc.get("categories") or {}).keys())
-        cats = sorted(cats, key=lambda c: len(c.split("/")), reverse=True)
-    except Exception as e:
-        print("by_category fail:", repr(e)[:120])
+    # per-article и by_category НЕ зависят друг от друга — тянем ПАРАЛЛЕЛЬНО.
+    res = {}; cats = []
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_item = ex.submit(mp_item, mp, str(sku))
+        f_bc = ex.submit(_get, f"https://mpstats.io/api/{mp}/get/item/{sku}/by_category")
+        try: res = f_item.result() or {}
+        except Exception as e: print("mp_item fail:", repr(e)[:150]); res = {}
+        try:
+            bc = f_bc.result()
+            cats = sorted(list((bc.get("categories") or {}).keys()), key=lambda c: len(c.split("/")), reverse=True)
+        except Exception as e: print("by_category fail:", repr(e)[:120])
     nt = niche_terms or {}
     itype = nt.get("include_type") or []; ictx = nt.get("include_context") or []
     exc = nt.get("exclude") or []; aud = nt.get("aud_exclude") or []
