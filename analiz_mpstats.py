@@ -234,4 +234,9 @@ def build_mpstats(platform, sku, url, name, niche_terms):
             if fr and res.get("niche"): res["niche"]["free"] = fr
         except Exception as e:
             print("mp_free fail:", repr(e)[:120])
+    # Если per-article собрался, но ниши нет — честная пометка (не выдумываем нишу).
+    if res and res.get("sales30_u") is not None and not res.get("niche"):
+        res["no_niche_reason"] = ("MPStats не категоризирует этот товар — рыночной ниши и конкурентов по нему в MPStats нет."
+                                  if not cats else
+                                  "По этому товару MPStats не нашёл прямых конкурентов того же типа.")
     return res or None
