@@ -240,8 +240,8 @@ def wb_price_pc(nm, timeout=300):
         if m:
             try:
                 d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
-                if d.get("price"): return {"price": d.get("price"), "price_old": d.get("price_old")}
-                return None
+                # Возвращаем и наличие (есть/нет с живой страницы), даже если цены нет (OOS)
+                return {"price": d.get("price"), "price_old": d.get("price_old"), "in_stock": d.get("in_stock")}
             except Exception: return None
     return None
 
@@ -919,7 +919,9 @@ def process_one():
                     # Живая цена WB — отдельный шаг через ПК-браузер (контент/отзывы уже собраны
                     # облаком и не зависят от ПК). Сбой здесь НЕ валит карточку — просто без цены.
                     pr = wb_price_pc(mm.group(1))
-                    if pr: dd["price"], dd["price_old"] = pr.get("price"), pr.get("price_old")
+                    if pr:
+                        dd["price"], dd["price_old"] = pr.get("price"), pr.get("price_old")
+                        if pr.get("in_stock") is not None: dd["in_stock"] = pr.get("in_stock")
                 return dd
             return None
         # ДОЛБИМ сбор, пока не соберётся ВСЁ нужное (отзывы/рейтинг И ФОТО). Частичный анализ
@@ -1016,6 +1018,7 @@ def process_one():
                    "processed_count": processed_count,
                    "processed_period": processed_period,
                    "is_stm": is_stm(data["platform"], data.get("nm") or data.get("pid"), data.get("brand",""), data.get("name","")),
+                   "in_stock": data.get("in_stock"),
                    **an}
             # MPStats-разделы (продажи/ниша/бренды/сегменты/подниши) ОБЯЗАТЕЛЬНЫ для WB/Ozon —
             # без них анализ неполный, публиковать НЕЛЬЗЯ. Долбим сбор до 3 раз (владелец, 2026-10-24).
