@@ -256,22 +256,38 @@ def build_mpstats(platform, sku, url, name, niche_terms):
     itype = nt.get("include_type") or []; ictx = nt.get("include_context") or []
     exc = nt.get("exclude") or []; aud = nt.get("aud_exclude") or []
     label = nt.get("label") or ""
-    # by_category пустой ≠ категории нет (MPStats просто не трекает позицию) — ищем в дереве сами
-    if not cats and itype:
+    # Где строить нишу: по категориям самого товара; если нет — ищем в дереве ЕГО площадки;
+    # если и там нет (MPStats не трекает категорию на этой площадке) — берём рынок того же типа
+    # на ДРУГОЙ площадке (кросс-платформа). by_category пустой ≠ категории нет.
+    niche_mp, niche_cats, cross = mp, cats, False
+    other = "oz" if mp == "wb" else "wb"
+    if not niche_cats and itype:
         try:
             fc = _find_category(mp, itype, ictx)
-            if fc: cats = [fc]; print("category fallback:", fc)
+            if fc: niche_cats = [fc]; print("category fallback (same):", fc)
         except Exception as e:
             print("find_category fail:", repr(e)[:120])
-    if cats and itype:
+    if not niche_cats and itype:
         try:
-            niche, market = mp_niche(mp, str(sku), cats, itype, ictx, exc, aud, label)
-            if niche: res["niche"] = niche
+            fc2 = _find_category(other, itype, ictx)
+            if fc2: niche_mp, niche_cats, cross = other, [fc2], True; print("category fallback (cross):", other, fc2)
+        except Exception as e:
+            print("find_category cross fail:", repr(e)[:120])
+    if niche_cats and itype:
+        niche_sku = str(sku) if niche_mp == mp else ""   # наш sku есть только на своей площадке
+        try:
+            niche, market = mp_niche(niche_mp, niche_sku, niche_cats, itype, ictx, exc, aud, label)
+            if niche:
+                if cross:
+                    niche["platform_note"] = ("Ниша и конкуренты — по рынку этого типа товара на "
+                        + ("Ozon" if niche_mp == "oz" else "WB")
+                        + " (на площадке товара MPStats его категорию не отслеживает).")
+                res["niche"] = niche
             if market: res["market"] = market
         except Exception as e:
             print("mp_niche fail:", repr(e)[:150])
         try:
-            fr = mp_free(mp, cats)
+            fr = mp_free(niche_mp, niche_cats)
             if fr and res.get("niche"): res["niche"]["free"] = fr
         except Exception as e:
             print("mp_free fail:", repr(e)[:120])
