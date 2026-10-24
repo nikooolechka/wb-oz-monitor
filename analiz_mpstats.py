@@ -86,7 +86,7 @@ def mp_item(mp, sku):
     # Продажи у MPStats по складам/штукам ненадёжны (особенно склейки). Если за 30 дней 0 — честно
     # «нет данных» в блоке продаж, а не «0». Наличие берём НЕ отсюда, а с живой карточки (браузер).
     nodata = (s30u == 0)
-    out = {"first_date": fd, "balance": (bal or 0), "balance_oos": bal_oos, "nodata": nodata, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
+    out = {"first_date": fd, "balance": (bal or 0), "nodata": nodata, "sales30_u": s30u, "sales30_r": sum(x["r"] for x in daily),
            "daily": daily, "daily_from": daily[0]["d"].replace("-", ".") if daily else "", "daily_to": (last30[-1]["data"][8:10] + "." + last30[-1]["data"][5:7] + "." + last30[-1]["data"][:4]) if last30 else "",
            "monthly": monthly, "months_year": "–".join(sorted(yrs)), "reviews_growth": rg, "oos": oos_txt,
            "position": None, "keywords": None, "buyout": None, "updated": d2}
