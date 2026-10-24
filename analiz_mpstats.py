@@ -82,11 +82,10 @@ def mp_item(mp, sku):
     bal = None
     for b in reversed(recent):
         if b: bal = b; break
-    # Различаем: MPStats вообще НЕ видит продажи (0 за все 6 мес при наличии товара = недоучёт
-    # склейки, НЕ реальный ноль) vs реальный OOS (были продажи, сейчас 0 остаток).
-    total_series = sum(x.get("sales") or 0 for x in s)
-    nodata = (total_series == 0)
-    bal_oos = (not bal) and not nodata
+    s30u = sum(x["u"] for x in daily)
+    # Продажи у MPStats по складам/штукам ненадёжны (особенно склейки). Если за 30 дней 0 — честно
+    # «нет данных» в блоке продаж, а не «0». Наличие берём НЕ отсюда, а с живой карточки (браузер).
+    nodata = (s30u == 0)
     out = {"first_date": fd, "balance": (bal or 0), "balance_oos": bal_oos, "nodata": nodata, "sales30_u": sum(x["u"] for x in daily), "sales30_r": sum(x["r"] for x in daily),
            "daily": daily, "daily_from": daily[0]["d"].replace("-", ".") if daily else "", "daily_to": (last30[-1]["data"][8:10] + "." + last30[-1]["data"][5:7] + "." + last30[-1]["data"][:4]) if last30 else "",
            "monthly": monthly, "months_year": "–".join(sorted(yrs)), "reviews_growth": rg, "oos": oos_txt,
