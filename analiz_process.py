@@ -880,6 +880,20 @@ def today():
     import datetime
     return (datetime.datetime.utcnow()+datetime.timedelta(hours=3)).strftime("%d.%m.%Y")
 
+def _photo_ok(url, t=20):
+    """Фото ОБЯЗАТЕЛЬНО: url есть И реально скачивается как валидная картинка.
+    Неполный анализ (без фото) публиковать НЕЛЬЗЯ (владелец, 2026-10-24)."""
+    if not url: return False
+    try:
+        raw = get(url, t=t)
+        if not raw or len(raw) < 500: return False
+        import io as _io
+        from PIL import Image as _I
+        _I.open(_io.BytesIO(raw)).convert("RGB")
+        return True
+    except Exception:
+        return False
+
 def process_one():
     # Общий FIFO: кто первый прислал — тот первый в очереди (берём САМУЮ СТАРУЮ ссылку, lines[0]).
     # Приёмник дописывает ссылки в конец по порядку прихода (от любого человека), обрабатываем
@@ -893,19 +907,31 @@ def process_one():
     msgid=parts[0]; chat=parts[1]; url=parts[2]; who=parts[3] if len(parts)>3 else ""
     an=None
     try:
-        if re.search(r"ozon\.", url):
-            m=re.search(r"/product/[^/]*?(\d{6,})", url) or re.search(r"(\d{6,})", url)
-            data=oz_collect(m.group(1), url=url) if m else None
-        elif re.search(r"wildberries\.|\.wb\.ru", url):
-            m=re.search(r"/catalog/(\d+)", url)
-            data=wb_collect(m.group(1)) if m else None
-            if data and not data.get("_pc_down"):
-                # Живая цена WB — отдельный шаг через ПК-браузер (контент/отзывы уже собраны
-                # облаком и не зависят от ПК). Сбой здесь НЕ валит карточку — просто без цены.
-                pr = wb_price_pc(m.group(1))
-                if pr: data["price"], data["price_old"] = pr.get("price"), pr.get("price_old")
-        else:
-            data=None
+        def _do_collect():
+            if re.search(r"ozon\.", url):
+                mm=re.search(r"/product/[^/]*?(\d{6,})", url) or re.search(r"(\d{6,})", url)
+                return oz_collect(mm.group(1), url=url) if mm else None
+            elif re.search(r"wildberries\.|\.wb\.ru", url):
+                mm=re.search(r"/catalog/(\d+)", url)
+                dd=wb_collect(mm.group(1)) if mm else None
+                if dd and not dd.get("_pc_down"):
+                    # Живая цена WB — отдельный шаг через ПК-браузер (контент/отзывы уже собраны
+                    # облаком и не зависят от ПК). Сбой здесь НЕ валит карточку — просто без цены.
+                    pr = wb_price_pc(mm.group(1))
+                    if pr: dd["price"], dd["price_old"] = pr.get("price"), pr.get("price_old")
+                return dd
+            return None
+        # ДОЛБИМ сбор, пока не соберётся ВСЁ нужное (отзывы/рейтинг И ФОТО). Частичный анализ
+        # (напр. без фото товара) публиковать НЕЛЬЗЯ — лучше ещё раз собрать (владелец, 2026-10-24).
+        data=None
+        for _att in range(4):
+            data=_do_collect()
+            if (not data) or data.get("_pc_down") or data.get("_wrong_variant"): break
+            _stars_ok=(data.get("stars") and sum(int(v or 0) for v in data["stars"].values())>0) or (data.get("name") and (data.get("reviews_pool_total") or 0)>0)
+            if _stars_ok and _photo_ok(data.get("photo")): break   # всё на месте — выходим
+            if _att<3:
+                print(f"сбор неполный (фото_ok={_photo_ok(data.get('photo'))}, stars_ok={_stars_ok}) — повтор {_att+2}/4")
+                time.sleep(20)
         if data and data.get("_pc_down"):
             tg_msg(chat,"Удалённый ПК сейчас недоступен (нужен для сбора с Ozon) — попробуй прислать ссылку чуть позже.")
             data=None
@@ -922,6 +948,12 @@ def process_one():
             # ЧЕСТНЫЙ 0 (пул собран, но по этому itemId 0 отзывов) — сюда НЕ попадает, публикуется ниже.
             tg_msg(chat,"👻УПС - что то сломалось\nСобрал карточку, но не смог собрать отзывы/рейтинг. Пришли ссылку ещё раз чуть позже.")
             tg_msg(OWNER_CHAT,"бот аналитик сломался, нужна починка")
+            data=None
+        elif not _photo_ok(data.get("photo")):
+            # Фото товара ОБЯЗАТЕЛЬНО. Неполный анализ (без фото) НЕ публикуем даже после ретраев —
+            # честно просим повторить, чтобы собрать всё (владелец, 2026-10-24).
+            tg_msg(chat,"👻Почти собрал, но не подтянулось фото товара. Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
+            tg_msg(OWNER_CHAT,"бот аналитик: не собралось фото товара после ретраев, не опубликовал (неполный анализ недопустим)")
             data=None
         elif not ANTHROPIC_KEY:
             tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
