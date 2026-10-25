@@ -201,6 +201,20 @@ def wb_collect(nm):
     if "reviews_total" not in out:
         out["reviews_total"]=len(reviews); out["rating"]=None
         st=Counter(r["s"] for r in reviews if r["s"]); out["stars"]={str(k):st.get(k,0) for k in (5,4,3,2,1)} if st else None
+    # ВОПРОСЫ к товару (публичный эндпоинт WB) — то, что покупатель спрашивает ДО покупки
+    # = скрытые сомнения/непонятности карточки. Фильтруем строго по nmId целевого товара
+    # (как и отзывы: questions.wildberries.ru отдаёт пул всей склейки).
+    try:
+        qj=json.loads(get(f"https://questions.wildberries.ru/api/v1/questions?imtId={imt}&take=30&skip=0&order=dateDesc"))
+        q_out=[]
+        for q in (qj.get("questions") or []):
+            if q.get("nmId")!=nm: continue
+            ans=((q.get("answer") or {}).get("text") or "").strip()
+            q_out.append({"t":(q.get("text","") or "").strip(),"a":ans,"date":q.get("createdDate","")})
+        out["questions"]=q_out
+        out["questions_total"]=qj.get("count")
+    except Exception as e:
+        out["questions"]=[]; out["questions_err"]=repr(e)[:120]
     return out
 
 # ---------- Ozon сбор (через ПК по пульту) ----------
@@ -390,6 +404,10 @@ def _existing_categories():
         return []
 
 def claude_analyze(data):
+    # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
+    questions = data.get("questions") or []
+    q_s = [{"q": (x.get("t") or "")[:300], "ans": bool(x.get("a"))} for x in questions[:40] if x.get("t")]
+    q_total = len(q_s)  # число вопросов ПО ЭТОМУ товару (не пул склейки) — честная плашка
     revs = data.get("reviews") or []  # анализируем ВСЕ собранные отзывы, не только последний месяц
     revs_month = _recent_reviews(revs, 30)  # ТОЛЬКО для порога значимости темы (10+ за месяц), не для анализа
     total = data.get("reviews_total") or len(revs) or 1
@@ -421,6 +439,7 @@ def claude_analyze(data):
 ОПИСАНИЕ ПРОДАВЦА: {(data.get('description') or '')[:1500]}
 ПОХВАЛА ИЗ ОТЗЫВОВ (выборка {len(pos_s)} из {len(pos)}): {json.dumps(pos_s, ensure_ascii=False)}
 ЖАЛОБЫ ИЗ ОТЗЫВОВ (выборка {len(neg_s)} из всего {len(neg)} — темы бери отсюда, числа посчитаются по всем): {json.dumps(neg_s, ensure_ascii=False)}
+ВОПРОСЫ ПОКУПАТЕЛЕЙ К ТОВАРУ (что спрашивают ДО покупки, всего {q_total}; это НЕ отзывы — это то, чего человеку НЕ ХВАТИЛО в карточке, чтобы решиться): {json.dumps(q_s, ensure_ascii=False)}
 
 УЖЕ ИСПОЛЬЗУЕМЫЕ НА ДАШБОРДЕ КАТЕГОРИИ: {json.dumps(_existing_categories(), ensure_ascii=False)}
 Для поля "category" — если товар подходит под одну из них, используй ЕЁ ДОСЛОВНО (не создавай почти-дубль с другой формулировкой). Если не подходит ни одна — придумай новую короткую категорию в том же стиле (2-4 слова, по-русски, тип товара как его понял бы покупатель — напр. "Интимная гигиена", "Детские денталы", "Жидкость для ирригатора", "Подгузники").
@@ -445,7 +464,9 @@ def claude_analyze(data):
 "praise":[{{"t":"тема простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
-"ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}]}}"""
+"ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}],
+"questions_analysis":{{"summary":"1-2 предложения: о чём покупатели чаще всего спрашивают до покупки и что это говорит о пробелах карточки","topics":[{{"t":"тема вопроса простыми словами","desc":"что именно хотят узнать, с конкретикой"}}],"card_gaps":["что добавить/прояснить в карточке (описание, инфографика, характеристики), раз об этом спрашивают — т.е. эти вопросы = непонятное покупателю"]}}}}
+Если вопросов нет (список ВОПРОСЫ пуст) — верни "questions_analysis": null. Анализируй вопросы ТОЛЬКО по этому товару (то же правило точности, что и для отзывов)."""
     # Ретраи: ИИ — ЕДИНСТВЕННЫЙ источник выводов (универсальный для любого товара, не только нашей ниши).
     # Если сбойнуло один раз (сеть/лимит) — пробуем ещё, вместо того чтобы тихо откатываться на
     # фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП" недопустимы для любого товара).
@@ -485,6 +506,11 @@ def claude_analyze(data):
     result = _enforce_scale(raw, total, neg_month, neg, pos)
     # Слова ниши от ИИ (для MPStats-разделов). Внутреннее поле — process_one его вынимает (pop),
     # в итоговую карточку дашборда НЕ попадает.
+    # Анализ вопросов (если были вопросы) — отдельным разделом на дашборде.
+    qa = raw.get("questions_analysis")
+    if qa and (qa.get("topics") or qa.get("card_gaps") or qa.get("summary")):
+        result["questions_analysis"] = qa
+        result["questions_total"] = q_total
     result["niche_terms"] = {"label": raw.get("niche_label"),
                              "include_type": raw.get("niche_include_type") or [],
                              "include_context": raw.get("niche_include_context") or [],
