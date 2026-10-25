@@ -418,34 +418,39 @@ def _ws_period():
 
 def build_wordstat(phrase, adjacent):
     """Тренд спроса по ТИПУ товара (чистая фраза из названия) за 12 мес + 3 смежных ключа.
-    Регион Россия (225). Возвращает None, если ключа нет или главная фраза не отдалась."""
+    Регион Россия (225). Все запросы (основной + смежные) идут ПАРАЛЛЕЛЬНО.
+    Возвращает None, если ключа нет или главная фраза не отдалась (ошибка)."""
     if not (WORDSTAT_KEY and phrase): return None
+    import concurrent.futures as _cf
     frm, to = _ws_period()
-    reqs = [0]
     def dyn(ph):
-        reqs[0] += 1
         r = get("https://searchapi.api.cloud.yandex.net/v2/wordstat/dynamics",
                 hdr={"Authorization": "Api-Key " + WORDSTAT_KEY, "Content-Type": "application/json"},
                 data=json.dumps({"phrase": ph, "period": "PERIOD_MONTHLY", "fromDate": frm, "toDate": to,
                                  "regions": ["225"], "folderId": WORDSTAT_FOLDER}).encode(), t=40)
         d = json.loads(r)
         return [{"m": (x.get("date") or "")[:7], "c": int(x.get("count") or 0)} for x in (d.get("results") or [])]
-    try:
-        monthly = dyn(phrase)
-    except Exception as e:
-        print("wordstat main failed:", repr(e)[:150]); return None
+    phrases = [phrase] + [a for a in (adjacent or [])[:3] if a]
+    results = {}
+    with _cf.ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {ex.submit(dyn, p): p for p in phrases}
+        for f in _cf.as_completed(futs):
+            try: results[futs[f]] = f.result()
+            except Exception: results[futs[f]] = None
+    monthly = results.get(phrase)
+    if monthly is None:                      # именно ошибка главного запроса → раздел не строим
+        print("wordstat main failed"); return None
     adj = []
     for ap in (adjacent or [])[:3]:
-        try:
-            m = dyn(ap); adj.append({"phrase": ap, "avg": round(sum(x["c"] for x in m)/max(1, len(m))) if m else 0})
-        except Exception: pass
+        m = results.get(ap)
+        if m is not None: adj.append({"phrase": ap, "avg": round(sum(x["c"] for x in m)/max(1, len(m))) if m else 0})
     avg_main = round(sum(x["c"] for x in monthly)/max(1, len(monthly))) if monthly else 0
     tp = None
     if len(monthly) >= 6:
         a = sum(x["c"] for x in monthly[:3])/3; b = sum(x["c"] for x in monthly[-3:])/3
         if a > 0: tp = round((b-a)/a*100)
     return {"phrase": phrase, "monthly": monthly, "avg": avg_main, "trend_pct": tp,
-            "adjacent": adj, "region": "Россия", "_reqs": reqs[0]}
+            "adjacent": adj, "region": "Россия", "_reqs": len(phrases)}
 
 def claude_analyze(data):
     # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
@@ -1112,6 +1117,14 @@ def process_one():
             def _mp_ok(x):
                 # Готово = есть продажи (per-article) И (ниша+бренды ЛИБО честная пометка «нет ниши в MPStats»).
                 return bool(x and x.get("sales30_u") is not None and ((x.get("niche") and x.get("market")) or x.get("no_niche_reason")))
+            # Вордстат гоним ПАРАЛЛЕЛЬНО с MPStats — его время прячется под сбор MPStats (экономия ~5-8с).
+            import threading
+            _wd_box={}
+            def _wd_worker():
+                if wterms and wterms.get("phrase"):
+                    try: _wd_box["wd"]=build_wordstat(wterms["phrase"], wterms.get("adjacent"))
+                    except Exception as _e: print("wordstat failed:", repr(_e)[:150])
+            _wd_th=threading.Thread(target=_wd_worker, daemon=True); _wd_th.start()
             mpd=None
             for _m in range(3):
                 try:
@@ -1124,16 +1137,13 @@ def process_one():
                     print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
             if _mp_ok(mpd):
                 entry["mpstats"]=mpd
-                # Вордстат — тренд спроса по ТИПУ товара + 3 смежных (не блокирует публикацию при сбое)
-                if wterms and wterms.get("phrase"):
-                    try:
-                        wd=build_wordstat(wterms["phrase"], wterms.get("adjacent"))
-                        if wd: entry["wordstat"]=wd
-                    except Exception as _e: print("wordstat failed:", repr(_e)[:150])
+                _wd_th.join(timeout=60)  # дожидаемся Вордстат (обычно уже готов за время MPStats)
+                if _wd_box.get("wd"): entry["wordstat"]=_wd_box["wd"]
                 card_png(entry, "/tmp/card.png")
                 update_dashboard(entry)
                 post_card(chat, entry, "/tmp/card.png")
             else:
+                _wd_th.join(timeout=2)  # не бросаем поток висеть
                 tg_msg(chat,"👻Почти готово: разобрал карточку и отзывы, но не собралась аналитика MPStats (продажи/ниша). Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
                 tg_msg(OWNER_CHAT,"бот аналитик: MPStats-разделы не собрались после ретраев, не опубликовал (неполный анализ недопустим)")
     finally:
