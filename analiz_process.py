@@ -16,6 +16,9 @@ BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
 GH_PAT = os.environ["GH_PAT"]
 OWNER_CHAT = "339473235"  # личка владельца @nikooolechka — сюда алерт о поломке бота
+# Вордстат (Yandex Search API) — тренд спроса по ТИПУ товара. Ключ в секрете репо.
+WORDSTAT_KEY = os.environ.get("WORDSTAT_API_KEY", "")
+WORDSTAT_FOLDER = os.environ.get("WORDSTAT_FOLDER", "b1g1fve9cptahjaa574l")
 
 # Наши собственные товары (СТМ АС-Фарм) — WB SKU из CLAUDE.md, как подстраховка на случай,
 # если МАТРИЦА (ниже) окажется недоступна. ОСНОВНОЙ источник — живая МАТРИЦА (ОП АС Фарм),
@@ -403,6 +406,46 @@ def _existing_categories():
     except Exception:
         return []
 
+def _ws_period():
+    # Последние 12 ПОЛНЫХ месяцев (до конца прошлого месяца).
+    import datetime
+    first_this = datetime.date.today().replace(day=1)
+    to_last = first_this - datetime.timedelta(days=1)       # последний день прошлого месяца
+    frm = to_last.replace(day=1)
+    for _ in range(11): frm = (frm - datetime.timedelta(days=1)).replace(day=1)
+    return frm.strftime("%Y-%m-01T00:00:00Z"), to_last.strftime("%Y-%m-%dT23:59:59Z")
+
+def build_wordstat(phrase, adjacent):
+    """Тренд спроса по ТИПУ товара (чистая фраза из названия) за 12 мес + 3 смежных ключа.
+    Регион Россия (225). Возвращает None, если ключа нет или главная фраза не отдалась."""
+    if not (WORDSTAT_KEY and phrase): return None
+    frm, to = _ws_period()
+    reqs = [0]
+    def dyn(ph):
+        reqs[0] += 1
+        r = get("https://searchapi.api.cloud.yandex.net/v2/wordstat/dynamics",
+                hdr={"Authorization": "Api-Key " + WORDSTAT_KEY, "Content-Type": "application/json"},
+                data=json.dumps({"phrase": ph, "period": "PERIOD_MONTHLY", "fromDate": frm, "toDate": to,
+                                 "regions": ["225"], "folderId": WORDSTAT_FOLDER}).encode(), t=40)
+        d = json.loads(r)
+        return [{"m": (x.get("date") or "")[:7], "c": int(x.get("count") or 0)} for x in (d.get("results") or [])]
+    try:
+        monthly = dyn(phrase)
+    except Exception as e:
+        print("wordstat main failed:", repr(e)[:150]); return None
+    adj = []
+    for ap in (adjacent or [])[:3]:
+        try:
+            m = dyn(ap); adj.append({"phrase": ap, "avg": round(sum(x["c"] for x in m)/max(1, len(m))) if m else 0})
+        except Exception: pass
+    avg_main = round(sum(x["c"] for x in monthly)/max(1, len(monthly))) if monthly else 0
+    tp = None
+    if len(monthly) >= 6:
+        a = sum(x["c"] for x in monthly[:3])/3; b = sum(x["c"] for x in monthly[-3:])/3
+        if a > 0: tp = round((b-a)/a*100)
+    return {"phrase": phrase, "monthly": monthly, "avg": avg_main, "trend_pct": tp,
+            "adjacent": adj, "region": "Россия", "_reqs": reqs[0]}
+
 def claude_analyze(data):
     # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
     questions = data.get("questions") or []
@@ -465,9 +508,15 @@ def claude_analyze(data):
 "complaints":[{{"t":"тема жалобы простыми словами","desc":"подробно, с конкретикой, БЕЗ чисел"}}],
 "gaps":[{{"claim":"что заявлено","reality":"что по отзывам на деле"}}],
 "ideal":[{{"text":"конкретная рекомендация","scope":"recipe или fix","based_on":["тема1"]}}],
-"questions_analysis":{{"topics":[{{"t":"тема вопроса простыми словами","desc":"что именно хотят узнать, с конкретикой"}}],"card_gaps":["что добавить/прояснить в карточке (описание, инфографика, характеристики), раз об этом спрашивают"]}}}}
+"questions_analysis":{{"topics":[{{"t":"тема вопроса простыми словами","desc":"что именно хотят узнать, с конкретикой"}}],"card_gaps":["что добавить/прояснить в карточке (описание, инфографика, характеристики), раз об этом спрашивают"]}},
+"wordstat_phrase":"тип товара чистой фразой в именительном падеже, без бренда/фасовки",
+"wordstat_adjacent":["смежный тип 1","смежный тип 2","смежный тип 3"]}}
 Если вопросов нет (список ВОПРОСЫ пуст) — верни "questions_analysis": null. Анализируй вопросы ТОЛЬКО по этому товару (то же правило точности, что и для отзывов).
-НЕ пиши обобщающих оценок и выводов (никаких «покупатели массово спрашивают», «это говорит о критическом пробеле» и т.п.) — только фактические темы вопросов и конкретно что добавить в карточку. Без драматизации и воды."""
+НЕ пиши обобщающих оценок и выводов (никаких «покупатели массово спрашивают», «это говорит о критическом пробеле» и т.п.) — только фактические темы вопросов и конкретно что добавить в карточку. Без драматизации и воды.
+
+Ещё два поля для анализа спроса в Вордстате (поисковые запросы Яндекса):
+- "wordstat_phrase" — ТИП товара как его РЕАЛЬНО ищут в поиске: короткая чистая фраза в ИМЕНИТЕЛЬНОМ падеже, БЕЗ бренда, БЕЗ фасовки/числа штук/объёма, без лишних слов, грамматически ровно (правильные окончания, не коряво). Это НЕ широкая ниша/категория. Примеры: «жидкость для ирригатора», «детские салфетки для зубов», «крем от натоптышей», «оральный спрей». Бери подсказку из НАЗВАНИЯ товара, убери лишнее.
+- "wordstat_adjacent" — ровно 3 СМЕЖНЫХ типа товара, по которым ищут похожее/сопутствующее (тоже чистые фразы в именительном, без бренда/фасовки). Напр. для жидкости ирригатора: ["ополаскиватель для рта","таблетки для ирригатора","ирригатор полости рта"]."""
     # Ретраи: ИИ — ЕДИНСТВЕННЫЙ источник выводов (универсальный для любого товара, не только нашей ниши).
     # Если сбойнуло один раз (сеть/лимит) — пробуем ещё, вместо того чтобы тихо откатываться на
     # фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП" недопустимы для любого товара).
@@ -518,6 +567,8 @@ def claude_analyze(data):
                              "include_type": raw.get("niche_include_type") or [],
                              "include_context": raw.get("niche_include_context") or [],
                              "exclude": raw.get("niche_exclude") or [], "aud_exclude": raw.get("niche_aud_exclude") or []}
+    result["wordstat_terms"] = {"phrase": (raw.get("wordstat_phrase") or "").strip(),
+                                "adjacent": raw.get("wordstat_adjacent") or []}
     return result
 
 def _enforce_scale(raw, total, neg_month_texts, neg_all_texts, pos_texts=None):
@@ -874,6 +925,11 @@ def update_dashboard(entry):
     cur=json.loads(base64.b64decode(r["content"]).decode())
     cur["products"]=[entry]+[p for p in cur.get("products",[]) if p.get("id")!=entry["id"]]
     cur["updated"]=entry["analyzed"]
+    # Счётчик расхода Вордстата: копим число запросов по месяцам (для счётчика на дашборде автоматизаций).
+    wreqs=(entry.get("wordstat") or {}).get("_reqs") or 0
+    if wreqs:
+        mkey=entry["analyzed"][:7]; sp=cur.setdefault("wordstat_spend",{})
+        sp[mkey]=sp.get(mkey,0)+wreqs
     body={"message":f"анализ: {entry['name'][:40]}","content":base64.b64encode(json.dumps(cur,ensure_ascii=False,indent=1).encode()).decode(),"sha":r["sha"]}
     urllib.request.urlopen(urllib.request.Request(api,data=json.dumps(body).encode(),method="PUT",headers={**h,"Content-Type":"application/json"}))
 
@@ -1003,6 +1059,7 @@ def process_one():
                 an = None
         if data and an is not None:
             nterms = an.pop("niche_terms", None)  # внутреннее: слова ниши для MPStats, в карточку не идёт
+            wterms = an.pop("wordstat_terms", None)  # внутреннее: чистый тип товара для Вордстата
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
             rt = data.get("reviews_total") or 0
@@ -1066,6 +1123,12 @@ def process_one():
                     print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
             if _mp_ok(mpd):
                 entry["mpstats"]=mpd
+                # Вордстат — тренд спроса по ТИПУ товара + 3 смежных (не блокирует публикацию при сбое)
+                if wterms and wterms.get("phrase"):
+                    try:
+                        wd=build_wordstat(wterms["phrase"], wterms.get("adjacent"))
+                        if wd: entry["wordstat"]=wd
+                    except Exception as _e: print("wordstat failed:", repr(_e)[:150])
                 card_png(entry, "/tmp/card.png")
                 update_dashboard(entry)
                 post_card(chat, entry, "/tmp/card.png")
