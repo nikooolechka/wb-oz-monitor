@@ -336,7 +336,8 @@ def oz_collect(pid, timeout=420, url=None):
                             "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
                             "photo":(d.get("gallery") or [None])[0],
                             "description":d.get("content_for_analysis") or "","sostav":"",
-                            "reviews":reviews}
+                            "reviews":reviews,
+                            "questions":d.get("questions") or [], "questions_total":len(d.get("questions") or [])}
                 return None
             except Exception: return None
     return None
