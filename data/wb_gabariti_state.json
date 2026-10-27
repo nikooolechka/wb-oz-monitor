@@ -99,6 +99,16 @@
       "status": "ok",
       "wb_vol": 0.455,
       "pct": -4
+    },
+    "irrigator_new_05": {
+      "status": "ok",
+      "wb_vol": 1.216,
+      "pct": 0
+    },
+    "irrigator_new_1": {
+      "status": "ok",
+      "wb_vol": 2.2,
+      "pct": 0
     }
   }
 }
