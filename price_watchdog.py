@@ -86,6 +86,20 @@ def _tg(text):
     except Exception as e:
         print("[watchdog] ошибка отправки:", e, flush=True)
 
+def _dispatch(wf):
+    if not GH_TOKEN:
+        print(f"[watchdog] нет токена для dispatch {wf}", flush=True); return
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{GH_REPO}/actions/workflows/{wf}/dispatches",
+        data=json.dumps({"ref": "main"}).encode(),
+        headers={"Authorization": "token " + GH_TOKEN,
+                 "Accept": "application/vnd.github+json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=30).read()
+        print(f"[watchdog] перезапустил {wf}", flush=True)
+    except Exception as e:
+        print(f"[watchdog] dispatch {wf} не удался:", e, flush=True)
+
 def _redispatch_wb():
     if not GH_TOKEN:
         print("[watchdog] нет токена для re-dispatch WB", flush=True); return
@@ -168,22 +182,23 @@ def run():
     for name, c in MARKETS:
         print(f"[watchdog] {name}: note={notes.get(c,'')!r}", flush=True)
 
-    # --- АВТО-РЕМОНТ через агента ПК (обе фазы) ---
-    # Несвежесть (не из-за разлогина) чиним сами: если агент ПК жив — командуем RUN,
-    # ждём и перечитываем штампы. Владельца дёргаем только если и это не помогло.
+    # --- АВТО-РЕМОНТ ОБЛАКОМ (с 28.10.2026; было: RUN агенту ПК) ---
+    # Цены с 23.10 пишет облако из Huckster (boevaya_prices.yml), ДМ — dm_prices.yml. ПК — только резерв.
+    # Старый RUN агенту ПК запускал ночной браузерный сбор (крон 21:45 GitHub откладывал за полночь,
+    # штампов нового дня ещё нет -> «всё несвежее» -> RUN в 01:43/01:58) и перезаписывал данные Huckster.
+    # Теперь несвежее чиним перезапуском облачных воркфлоу; ПК НЕ трогаем.
     agent_hb = ""
     if stale:
-        alive, agent_hb = _agent_alive()
-        if alive:
-            print(f"[watchdog] несвежие {stale}: агент ПК жив ({agent_hb}) → RUN", flush=True)
-            if _agent_run():
-                notes = _notes()
-                stale, logout = _recount(notes, today)
-                print(f"[watchdog] после RUN: stale={stale} logout={logout}", flush=True)
-            else:
-                print("[watchdog] RUN не дал «done» вовремя", flush=True)
-        else:
-            print(f"[watchdog] несвежие {stale}, агент ПК не отвечает (hb={agent_hb!r}) — RUN не шлю", flush=True)
+        wfs = (["boevaya_prices.yml"] if any(m in stale for m in ("WB", "ОЗОН", "ЯМ")) else []) + \
+              (["dm_prices.yml"] if "ДМ" in stale else [])
+        for wf in wfs:
+            _dispatch(wf)
+        if wfs:
+            print(f"[watchdog] несвежие {stale}: перезапустил {wfs}, жду 6 мин…", flush=True)
+            time.sleep(360)
+            notes = _notes()
+            stale, logout = _recount(notes, today)
+            print(f"[watchdog] после облачного перезапуска: stale={stale} logout={logout}", flush=True)
 
     if phase == "early":
         # облачный фолбэк для ВБ, если авто-ремонт не помог (или агент офлайн)
