@@ -924,6 +924,97 @@ def card_png(d, path):
                 dr.text((ix,iy),ln,font=_font(400,24),fill=(255,220,224)); iy+=31
     img.save(path,"PNG")
 
+# ---------- Категория для фильтра дашборда (отдельный шаг, владелец 2026-10-28) ----------
+# Было: ИИ видел только НАЗВАНИЯ категорий + «если подходит — бери дословно» -> натягивал ближайшую
+# («Индикатор зубного налёта» -> «Детские денталы», оральный спрей 18+ и интим-салфетки -> одна категория).
+# Стало: ИИ видит, КАКИЕ товары уже лежат в каждой категории, и кладёт туда только ПРЯМУЮ ЗАМЕНУ им.
+# Не жёсткий справочник — категории складываются сами из разобранных товаров.
+def _category_map(products=None, exclude_id=None):
+    if products is None:
+        try:
+            products = json.loads(get("https://raw.githubusercontent.com/" + DASH_REPO + "/main/docs/analiz_data.json", t=15)).get("products", [])
+        except Exception:
+            products = []
+    m = {}
+    for p in products:
+        if p.get("id") == exclude_id or not p.get("category"):
+            continue
+        m.setdefault(p["category"], []).append((p.get("name") or "")[:90])
+    return {k: v[:6] for k, v in m.items()}
+
+def categorize(name, brand="", desc="", niche="", cat_map=None):
+    """Категория товара для фильтра дашборда. None — если ИИ не ответил (тогда остаётся категория из общего разбора)."""
+    if not ANTHROPIC_KEY:
+        return None
+    if cat_map is None:
+        cat_map = _category_map()
+    prompt = f"""Ты раскладываешь товары по категориям фильтра на дашборде анализа карточек маркетплейсов.
+
+ТОВАР: {name}
+БРЕНД: {brand}
+НИША (как ищут): {niche}
+ОПИСАНИЕ: {(desc or '')[:900]}
+
+УЖЕ ЕСТЬ КАТЕГОРИИ (в скобках — товары, которые в них лежат):
+{json.dumps(cat_map, ensure_ascii=False, indent=1) if cat_map else "пока нет ни одной"}
+
+ПРАВИЛА:
+1. Категория = ТИП ТОВАРА, как раздел магазина: что это физически (форма: салфетки, паста, спрей, гель, крем, жидкость, индикатор, набор…) + для чего + для кого, если аудитория меняет сам тип (детские салфетки для зубов ≠ взрослые).
+2. В существующую категорию клади, ТОЛЬКО если товар — ПРЯМАЯ ЗАМЕНА товарам, которые в ней уже лежат: покупатель выбирал бы между ними. Сверяй с товарами в скобках, а не с названием категории.
+3. Общий ингредиент (ксилит, гиалуронка), общая тема (зубы, интим, уход) или общая аудитория — НЕ повод класть вместе. Пример: индикатор зубного налёта — не салфетки для зубов; оральный спрей 18+ — не салфетки для интимной гигиены.
+4. Сомневаешься — заводи новую категорию.
+5. Новая категория: 2-4 слова по-русски, без бренда, вкуса, объёма и числа штук. Не слишком узко (вкус/фасовка — не категория) и не слишком широко («Гигиена», «Уход» — плохо).
+
+Верни СТРОГО JSON без markdown: {{"category":"…","decision":"existing|new","why":"одна короткая фраза"}}"""
+    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 300,
+                       "messages": [{"role": "user", "content": prompt}]}).encode()
+    for attempt in range(3):
+        try:
+            r = json.loads(get("https://api.anthropic.com/v1/messages",
+                               hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                               data=body, t=90))
+            txt = r["content"][0]["text"]
+            j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
+            cat = (j.get("category") or "").strip()
+            if cat:
+                print(f"категория: {cat} ({j.get('decision')}; {j.get('why')})")
+                return cat
+        except Exception as e:
+            print(f"categorize попытка {attempt+1}/3: {repr(e)[:150]}")
+            time.sleep(5)
+    return None
+
+def recategorize_all(dry=False):
+    """Пересортировать ВСЕ товары дашборда тем же правилом. Категории строятся заново по порядку анализа
+       (старые -> новые): каждый товар видит категории уже пересортированных. Пишет только поле category."""
+    api = f"https://api.github.com/repos/{DASH_REPO}/contents/docs/analiz_data.json"
+    h = {"Authorization": "Bearer " + GH_PAT, "Accept": "application/vnd.github+json", "User-Agent": "analiz"}
+    cur = json.loads(base64.b64decode(json.loads(get(api, hdr=h))["content"]).decode())
+    prods = cur.get("products", [])
+    done, newcat = [], {}
+    for p in reversed(prods):
+        nt = p.get("niche") if isinstance(p.get("niche"), str) else ""
+        cat = categorize(p.get("name", ""), p.get("brand", ""), p.get("description", "") or p.get("ca", ""), nt,
+                         _category_map(done))
+        newcat[p["id"]] = cat or p.get("category")
+        done.append({**p, "category": newcat[p["id"]]})
+    r = json.loads(get(api, hdr=h))                      # свежий sha: могли добавиться товары
+    cur = json.loads(base64.b64decode(r["content"]).decode())
+    changes = []
+    for p in cur.get("products", []):
+        if p["id"] in newcat and newcat[p["id"]] and newcat[p["id"]] != p.get("category"):
+            changes.append((p.get("name", "")[:60], p.get("category"), newcat[p["id"]]))
+            p["category"] = newcat[p["id"]]
+    for n, a, b in changes:
+        print(f"ПЕРЕСОРТ: {n} | {a} -> {b}")
+    if changes and not dry:
+        body = {"message": f"анализ: пересортировка категорий ({len(changes)})",
+                "content": base64.b64encode(json.dumps(cur, ensure_ascii=False, indent=1).encode()).decode(), "sha": r["sha"]}
+        urllib.request.urlopen(urllib.request.Request(api, data=json.dumps(body).encode(), method="PUT",
+                                                      headers={**h, "Content-Type": "application/json"}))
+    print("пересортировано:", len(changes), "из", len(prods))
+    return changes
+
 # ---------- Обновление дашборда (docs/analiz_data.json в pages-репо) ----------
 def update_dashboard(entry):
     api=f"https://api.github.com/repos/{DASH_REPO}/contents/docs/analiz_data.json"
@@ -1066,6 +1157,11 @@ def process_one():
                 an = None
         if data and an is not None:
             nterms = an.pop("niche_terms", None)  # внутреннее: слова ниши для MPStats, в карточку не идёт
+            _cat = categorize(data.get("name", ""), data.get("brand", ""), data.get("description", ""),
+                              (nterms or {}).get("label") or "",
+                              _category_map(exclude_id=f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}"))
+            if _cat:
+                an["category"] = _cat
             wterms = an.pop("wordstat_terms", None)  # внутреннее: чистый тип товара для Вордстата
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
@@ -1153,6 +1249,9 @@ def process_one():
     return "done" if lines else "empty"
 
 if __name__ == "__main__":
+    _mode = os.environ.get("ANALIZ_MODE", "") or ("recat" if "--recat" in sys.argv else "")
+    if _mode in ("recat", "recat-dry"):
+        recategorize_all(dry=(_mode == "recat-dry")); sys.exit(0)
     n=0
     while n<5:
         r=process_one()

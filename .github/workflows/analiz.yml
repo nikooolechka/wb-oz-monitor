@@ -1,6 +1,11 @@
 name: analiz_process
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "recat — пересортировать категории всех товаров дашборда; recat-dry — только показать в логе"
+        required: false
+        default: ""
   schedule:
     - cron: "*/10 * * * *"
 concurrency:
@@ -25,4 +30,5 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
           MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
           WORDSTAT_API_KEY: ${{ secrets.WORDSTAT_API_KEY }}
+          ANALIZ_MODE: ${{ github.event.inputs.mode }}
         run: python analiz_process.py
