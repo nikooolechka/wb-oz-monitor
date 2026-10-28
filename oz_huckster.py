@@ -21,6 +21,9 @@ MARKETS = [
     ("yandex", "22610087", "ym_цены"),
 ]
 STATE_TAB = "oz_alert_state"
+FRESH_TAB = "huck_fresh_state"
+FRESH_MAX_H = 2      # Huckster не обновлял цены маркетплейса дольше -> алерт (28.10.2026: Ozon встал с 10:20, цены «замёрзли», алертов не было)
+LAST_UPD = {}        # mp -> самый свежий last_update (МСК, ISO) среди активных товаров
 KEEP_DAYS = 14
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -69,6 +72,8 @@ def huckster_cards(H, mp, shop):
         cp = it.get("market_card_price")
         if it.get("parsing_status") == "Работает" and cp:   # активные с ценой
             out[it["uid"]] = int(round(cp))
+            lu = (it.get("last_update") or "")[:19]
+            if lu > LAST_UPD.get(mp, ""): LAST_UPD[mp] = lu
     return out
 
 # ---- Google Sheets ----
@@ -244,6 +249,34 @@ def record(cards, tab):
             {"requests": [{"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS", "startIndex": 1, "endIndex": 1 + old}}}]})
         print(f"[OK] {tab}: удалено старых строк (>{KEEP_DAYS} дн): {old}")
 
+MP_NAME = {"ozon": "Озон", "wildberries": "ВБ", "yandex": "ЯМ"}
+
+def check_freshness():
+    """Huckster сам перестаёт обновлять цены маркетплейса -> у нас «цены не меняются» и тишина в алертах.
+       Ловим по last_update: старше FRESH_MAX_H ч -> один алерт; ожило -> «снова обновляет». Ночью (20-8) не шлём."""
+    ensure_tab(FRESH_TAB)
+    try:
+        v = read_vals(f"{FRESH_TAB}!A1"); st = json.loads(v[0][0]) if v and v[0] and v[0][0] else {}
+    except Exception:
+        st = {}
+    now = msk().replace(tzinfo=None); day = 8 <= now.hour < 20
+    for mp, lu in LAST_UPD.items():
+        try: t = datetime.datetime.strptime(lu, "%Y-%m-%dT%H:%M:%S")
+        except Exception: continue
+        age_h = (now - t).total_seconds() / 3600
+        stale = age_h > FRESH_MAX_H; was = st.get(mp, {}).get("alerted", False)
+        print(f"[FRESH] {mp}: last_update {lu} ({age_h:.1f} ч) stale={stale}", flush=True)
+        if stale and not was and day:
+            notify(f"<b>❗️Huckster не обновляет цены {MP_NAME.get(mp, mp)}</b>\n"
+                   f"Последнее обновление: {t.strftime('%d.%m %H:%M')} ({age_h:.0f} ч назад).\n"
+                   f"Цены и алерты по вилке сейчас по старым данным. Проверь кабинет Huckster.")
+            st[mp] = {"alerted": True, "since": lu}
+        elif not stale and was:
+            notify(f"<b>✅ Huckster снова обновляет цены {MP_NAME.get(mp, mp)}</b>\nПоследнее обновление: {t.strftime('%d.%m %H:%M')}.")
+            st[mp] = {"alerted": False}
+    gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(FRESH_TAB+'!A1')}?valueInputOption=RAW",
+         {"values": [[json.dumps(st, ensure_ascii=False)]]})
+
 def main():
     H = huckster_session()
     for mp, shop, tab in MARKETS:
@@ -256,6 +289,10 @@ def main():
         if mp == "ozon":
             check_alerts(cards)          # вилки/алерты пока только по Ozon
         record(cards, tab)
+    try:
+        check_freshness()
+    except Exception as e:
+        print(f"[WARN] проверка свежести Huckster: {e}")
 
 if __name__ == "__main__":
     main()
