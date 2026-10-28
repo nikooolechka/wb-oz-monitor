@@ -942,7 +942,7 @@ def _category_map(products=None, exclude_id=None):
         m.setdefault(p["category"], []).append((p.get("name") or "")[:90])
     return {k: v[:6] for k, v in m.items()}
 
-def categorize(name, brand="", desc="", niche="", cat_map=None):
+def categorize(name, brand="", desc="", niche="", cat_map=None, current=None):
     """Категория товара для фильтра дашборда. None — если ИИ не ответил (тогда остаётся категория из общего разбора)."""
     if not ANTHROPIC_KEY:
         return None
@@ -954,6 +954,7 @@ def categorize(name, brand="", desc="", niche="", cat_map=None):
 БРЕНД: {brand}
 НИША (как ищут): {niche}
 ОПИСАНИЕ: {(desc or '')[:900]}
+{("СЕЙЧАС У ТОВАРА КАТЕГОРИЯ: «" + current + "». Если она по правилам ниже верна (товар — прямая замена тем, кто в ней лежит), ОСТАВЬ ЭТО НАЗВАНИЕ дословно. Меняй, только если товар туда реально не подходит.") if current else ""}
 
 УЖЕ ЕСТЬ КАТЕГОРИИ (в скобках — товары, которые в них лежат):
 {json.dumps(cat_map, ensure_ascii=False, indent=1) if cat_map else "пока нет ни одной"}
@@ -995,7 +996,7 @@ def recategorize_all(dry=False):
     for p in reversed(prods):
         nt = p.get("niche") if isinstance(p.get("niche"), str) else ""
         cat = categorize(p.get("name", ""), p.get("brand", ""), p.get("description", "") or p.get("ca", ""), nt,
-                         _category_map(done))
+                         _category_map(done), current=p.get("category"))
         newcat[p["id"]] = cat or p.get("category")
         done.append({**p, "category": newcat[p["id"]]})
     r = json.loads(get(api, hdr=h))                      # свежий sha: могли добавиться товары
