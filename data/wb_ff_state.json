@@ -1,10 +1,10 @@
 {
   "мск|dental20": {
-    "last": 53,
+    "last": 56,
     "phase": "alerted_low"
   },
   "мск|dental20zemlyanika": {
-    "last": 244,
+    "last": 224,
     "phase": "armed"
   },
   "мск|dental50": {
@@ -12,15 +12,15 @@
     "phase": "alerted_low"
   },
   "мск|dental100zemlyanika": {
-    "last": 62,
+    "last": 55,
     "phase": "alerted_low"
   },
   "мск|dental100banan": {
-    "last": 52,
+    "last": 51,
     "phase": "alerted_low"
   },
   "мск|criol25new": {
-    "last": 16,
+    "last": 15,
     "phase": "armed"
   },
   "мск|criol50": {
@@ -40,7 +40,7 @@
     "phase": "armed"
   },
   "мск|spraydlyapolostyrta": {
-    "last": 103,
+    "last": 97,
     "phase": "alerted_low"
   },
   "мск|oralcherry": {
@@ -48,23 +48,23 @@
     "phase": "alerted_zero"
   },
   "мск|dental40natural": {
-    "last": 96,
+    "last": 95,
     "phase": "alerted_low"
   },
   "мск|dental40": {
-    "last": 98,
+    "last": 74,
     "phase": "alerted_low"
   },
   "мск|dental40zemlyanika": {
-    "last": 127,
+    "last": 115,
     "phase": "alerted_low"
   },
   "мск|extractpihta": {
-    "last": 25,
+    "last": 23,
     "phase": "alerted_low"
   },
   "мск|extractromashka": {
-    "last": 47,
+    "last": 44,
     "phase": "alerted_low"
   },
   "мск|makeup50": {
@@ -72,15 +72,15 @@
     "phase": "armed"
   },
   "мск|dental100": {
-    "last": 355,
+    "last": 363,
     "phase": "alerted_low"
   },
   "екб|dental20": {
-    "last": 161,
+    "last": 158,
     "phase": "armed"
   },
   "екб|dental20zemlyanika": {
-    "last": 44,
+    "last": 43,
     "phase": "alerted_low"
   },
   "екб|dental50": {
@@ -116,11 +116,11 @@
     "phase": "alerted_low"
   },
   "екб|dental40natural": {
-    "last": 103,
+    "last": 102,
     "phase": "armed"
   },
   "екб|dental40": {
-    "last": 83,
+    "last": 82,
     "phase": "alerted_low"
   },
   "екб|dental40zemlyanika": {
@@ -180,7 +180,7 @@
     "phase": "alerted_zero"
   },
   "казань|spraydlyapolostyrta": {
-    "last": 14,
+    "last": 12,
     "phase": "alerted_low"
   },
   "казань|oralcherry": {
@@ -216,7 +216,7 @@
     "phase": "alerted_low"
   },
   "екб|dental100zemlyanika": {
-    "last": 98,
+    "last": 96,
     "phase": "armed"
   },
   "екб|oralcherry": {
