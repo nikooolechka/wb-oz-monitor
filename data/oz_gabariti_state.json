@@ -52,8 +52,8 @@
     },
     "Irrigator_500": {
       "status": "ok",
-      "oz_dims": "24,5×7×6,5",
-      "oz_vol": 1.115
+      "oz_dims": "25,4×7,2×7,1",
+      "oz_vol": 1.298
     },
     "spraydlyapolostyrta": {
       "status": "ok",
