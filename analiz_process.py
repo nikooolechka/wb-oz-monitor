@@ -967,7 +967,7 @@ def categorize(name, brand="", desc="", niche="", cat_map=None, current=None):
 5. Новая категория: 2-4 слова по-русски, без бренда, вкуса, объёма и числа штук. Не слишком узко (вкус/фасовка — не категория) и не слишком широко («Гигиена», «Уход» — плохо).
 
 Верни СТРОГО JSON без markdown: {{"category":"…","decision":"existing|new","why":"одна короткая фраза"}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 300,
+    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 300, "temperature": 0,
                        "messages": [{"role": "user", "content": prompt}]}).encode()
     for attempt in range(3):
         try:
