@@ -31,16 +31,34 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "-1004333189794").strip()
 
 # Вилки допустимых цен с картой Ozon (min, max ₽), владелец 2026-10-23.
 # Цена вышла за вилку хоть на 1 ₽ -> алерт в канал (с дедупом по событию).
-RANGES = {
-    "Dental20": (515, 525), "Dental_40": (765, 775), "Dental_100": (1270, 1290),
-    "Dental50": (780, 800), "Dental_100_zemlyanika": (1230, 1250), "Dental_100_banan": (1180, 1200),
-    "Dental_20_zemlyanika": (505, 515), "Dental_40_zemlyanika": (765, 775), "Dental_40_natural": (775, 785),
-    "Zub_pasta_det": (375, 385), "Irrigator_500": (670, 690), "Irrigator_1000": (1150, 1170),
-    "OptikaSpray_new": (365, 375), "spraydlyapolostyrta": (630, 650), "Oral_cherry": (650, 670),
-    "CrioGel1l": (1230, 1250), "CrioGel_5": (3520, 3560), "Crio_L25(new)": (3730, 3770),
-    "CrioL50": (6310, 6390), "cryolipolysis25": (3520, 3560), "Cryolipolysis50": (5660, 5720),
-    "makeup_30": (580, 600), "extract_romashka": (750, 770), "extract_pihta": (750, 770),
-    "makeup_50": (950, 970), "irrigator_new_05": (670, 690), "irrigator_new_1": (1150, 1170),
+RANGES = {  # вилки цены с картой Ozon (min, max ₽), владелец обновила 2026-11-02 (CrioGel_5: прислано «320-3360», принято 3320-3360 как опечатка)
+    "Dental20": (510, 530),
+    "Dental_40": (760, 780),
+    "Dental_100": (1270, 1290),
+    "Dental50": (780, 800),
+    "Dental_100_zemlyanika": (1230, 1250),
+    "Dental_100_banan": (1180, 1200),
+    "Dental_20_zemlyanika": (500, 520),
+    "Dental_40_zemlyanika": (760, 780),
+    "Dental_40_natural": (770, 790),
+    "Zub_pasta_det": (360, 380),
+    "Irrigator_500": (600, 640),
+    "Irrigator_1000": (960, 1000),
+    "OptikaSpray_new": (320, 370),
+    "spraydlyapolostyrta": (570, 620),
+    "Oral_cherry": (610, 630),
+    "CrioGel1l": (1120, 1160),
+    "CrioGel_5": (3320, 3360),
+    "Crio_L25(new)": (3530, 3570),
+    "CrioL50": (6330, 6370),
+    "cryolipolysis25": (3330, 3370),
+    "Cryolipolysis50": (5430, 5470),
+    "makeup_30": (480, 500),
+    "extract_romashka": (750, 770),
+    "extract_pihta": (750, 770),
+    "makeup_50": (950, 990),
+    "irrigator_new_05": (600, 640),
+    "irrigator_new_1": (970, 1000),
 }
 
 def msk():
