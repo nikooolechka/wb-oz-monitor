@@ -11,7 +11,7 @@
 - MPStats по продажам НЕДОСТОВЕРЕН (особенно склейки Ozon) — на дашборде висит красная сноска.
 Сбой любого шага НЕ должен валить карточку: все публичные вызовы обёрнуты, возвращаем что собралось.
 """
-import os, urllib.request, json, ssl, urllib.parse, statistics, re, datetime
+import os, urllib.request, urllib.error, json, ssl, urllib.parse, statistics, re, datetime, time
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,15 +23,30 @@ MONTHS = {"01":"янв","02":"фев","03":"мар","04":"апр","05":"май",
 def _today():
     return datetime.datetime.utcnow() + datetime.timedelta(hours=3)  # МСК
 
+def _open_json(req, tries=3):
+    # MPStats-API иногда рвёт соединение/таймаутит — повторяем на сетевых сбоях (НЕ на 4xx: там смысла нет).
+    last = None
+    for i in range(tries):
+        try:
+            return json.load(urllib.request.urlopen(req, timeout=60, context=CTX))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and i < tries - 1:   # лимит — подождать и повторить
+                last = e; time.sleep(8); continue
+            raise
+        except Exception as e:                    # таймаут/обрыв SSL/URLError — повтор
+            last = e
+            if i < tries - 1: time.sleep(4)
+    raise last
+
 def _get(url):
     r = urllib.request.Request(url, headers={"X-Mpstats-TOKEN": TOKEN})
-    return json.load(urllib.request.urlopen(r, timeout=40, context=CTX))
+    return _open_json(r)
 
 def _cat_page(mp, path, s, e, d1, d2):
     u = f"https://mpstats.io/api/{mp}/get/category?path={urllib.parse.quote(path)}&d1={d1}&d2={d2}"
     body = json.dumps({"startRow": s, "endRow": e, "sortModel": [{"colId": "revenue", "sort": "desc"}], "filterModel": {}}).encode()
     r = urllib.request.Request(u, data=body, headers={"X-Mpstats-TOKEN": TOKEN, "Content-Type": "application/json"})
-    return json.load(urllib.request.urlopen(r, timeout=40, context=CTX)).get("data") or []
+    return (_open_json(r).get("data") or [])
 
 def _itemurl(mp, sku):
     return f"https://www.wildberries.ru/catalog/{sku}/detail.aspx" if mp == "wb" else f"https://www.ozon.ru/product/{sku}/"
