@@ -362,7 +362,7 @@ def _make_driver():
     import subprocess, shutil
     sys.path.insert(0, os.path.join(D,"py","Lib","site-packages"))
     import undetected_chromedriver as uc
-    prof=os.path.join(D,"ozprofile"); ver=_chrome_ver()
+    prof=os.path.join(D,"ozprofile_bot"); ver=_chrome_ver()
     for im in ("chrome.exe","chromedriver.exe","undetected_chromedriver.exe"):
         try: subprocess.run(["taskkill","/F","/IM",im,"/T"],capture_output=True)
         except Exception: pass
@@ -397,14 +397,14 @@ def _make_driver():
 def _profile_busy():
     # Профиль ozprofile занят, если на нём уже держит сессию другой процесс Chrome
     # (напр. продовый сбор цен 10:00/17:00) — у него lock-файлы Singleton*.
-    return bool(glob.glob(os.path.join(D,"ozprofile","Singleton*")))
+    return bool(glob.glob(os.path.join(D,"ozprofile_bot","Singleton*")))
 
 def _simple_launch():
     # Чистый запуск БЕЗ taskkill — используется, пока профиль похож на занятый живым
     # процессом (ждём, не трогаем чужую сессию, см. _get_driver).
     sys.path.insert(0, os.path.join(D,"py","Lib","site-packages"))
     import undetected_chromedriver as uc
-    prof=os.path.join(D,"ozprofile"); ver=_chrome_ver()
+    prof=os.path.join(D,"ozprofile_bot"); ver=_chrome_ver()
     opts=uc.ChromeOptions(); opts.add_argument("--window-size=1200,900")
     kw={"user_data_dir":prof,"options":opts}
     if ver: kw["version_main"]=ver
