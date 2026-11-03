@@ -468,16 +468,30 @@ def _ygpt(prompt, maxt="8000", temp=0.2, t=120):
 
 # ---------- Gemini (Google) — запасной движок, работает из облака, без верификации ----------
 GEMINI_KEY = os.environ.get("GEMINI_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")  # у flash-latest нет free-квоты->429; preview нестабилен->503; 3.6-flash стабилен, free-квота есть
-def _gemini(prompt, maxt="8000", temp=0.2, t=120):
+# Бесплатные модели Gemini скачут 429/503 — держим СПИСОК и перебираем: какая-нибудь свободна.
+# (flash-latest без free-квоты->429; 2.5-* закрыты для новых->404; 3.7/3.8 бывают медленные->таймаут.)
+GEMINI_MODELS = [m.strip() for m in os.environ.get(
+    "GEMINI_MODEL", "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview").split(",") if m.strip()]
+def _gemini(prompt, maxt="8000", temp=0.2, t=90):
     # thinkingBudget:0 — ОТКЛЮЧАЕМ «размышления» gemini-3.x, иначе на больших промптах таймаут.
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"temperature": temp, "maxOutputTokens": int(maxt),
                                             "thinkingConfig": {"thinkingBudget": 0}}}).encode()
-    r = get(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}",
-            hdr={"Content-Type": "application/json"}, data=body, t=t)
-    d = json.loads(r)
-    return d["candidates"][0]["content"]["parts"][0]["text"]
+    last = None
+    for M in GEMINI_MODELS:
+        try:
+            r = get(f"https://generativelanguage.googleapis.com/v1beta/models/{M}:generateContent?key={GEMINI_KEY}",
+                    hdr={"Content-Type": "application/json"}, data=body, t=t)
+            d = json.loads(r)
+            return d["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            last = e
+            er = repr(e)
+            # 403/401 — ключ/доступ, перебор моделей не спасёт -> наружу сразу
+            if any(w in er for w in ("403", "401", "PermissionDenied", "Forbidden")): raise
+            # 429/503/таймаут/400/404 у этой модели — пробуем СЛЕДУЮЩУЮ (какая-то свободна/валидна)
+            continue
+    raise last if last else RuntimeError("gemini: нет моделей")
 
 def _ygpt_json(prompt, want="array", retries=6, maxt="8000", temp=0.2, call=None):
     call = call or _ygpt
@@ -627,9 +641,10 @@ def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
     YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
     с перечислением причин (их увидит владелец в личке). Гнилой/пустой результат НЕ принимаем."""
+    # Порядок: Gemini (рабочий сейчас) -> YandexGPT (запасной, оживёт после пересборки) -> Claude.
     chain = []
-    if YGPT_KEY: chain.append(("YandexGPT", lambda: ygpt_analyze(data, call=_ygpt)))
     if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
+    if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
     if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     errs = []
     for nm, fn in chain:
