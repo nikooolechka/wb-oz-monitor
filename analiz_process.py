@@ -634,8 +634,10 @@ def ygpt_analyze(data, call=None):
     return result
 
 def gemini_analyze(data):
-    # Тот же многопроходный метод, но через Gemini (Google). Запасной движок.
-    return ygpt_analyze(data, call=_gemini)
+    # Gemini — СИЛЬНАЯ модель: весь разбор ОДНИМ цельным запросом (единый промпт Claude), а НЕ
+    # мультипроходом ygpt (тот слал 6 тяжёлых запросов и валил бесплатный лимит токенов/мин -> 429).
+    # _gemini внутри сам перебирает модели на 429/503.
+    return claude_analyze(data, fetch=_gemini)
 
 def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
@@ -661,7 +663,9 @@ def run_analysis(data):
     raise RuntimeError("все движки ИИ недоступны -> " + " | ".join(errs))
 
 
-def claude_analyze(data):
+def claude_analyze(data, fetch=None):
+    # fetch=None -> движок Claude (Anthropic). fetch=функция(prompt,maxt,temp,t)->текст -> любой
+    # ДРУГОЙ сильный движок (Gemini) тем же ЕДИНЫМ промптом (1 запрос, а не мультипроход на 6).
     # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
     questions = data.get("questions") or []
     q_s = [{"q": (x.get("t") or "")[:300], "ans": bool(x.get("a"))} for x in questions[:40] if x.get("t")]
@@ -745,28 +749,40 @@ def claude_analyze(data):
     last_err = None
     ATTEMPTS = 6
     cur_max_tokens = 12000
+    eng = "gemini" if fetch is not None else "claude"
     for attempt in range(ATTEMPTS):
         try:
-            body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": cur_max_tokens,
-                                "messages": [{"role": "user", "content": prompt}]}).encode()
-            r = get("https://api.anthropic.com/v1/messages",
-                    hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                    data=body, t=300)  # 300с: на 1000+ отзывов генерация ответа дольше 90с (был таймаут → 10 ретраев → падение)
-            resp = json.loads(r)
-            if resp.get("stop_reason") == "max_tokens":
-                cur_max_tokens = min(cur_max_tokens * 2, 32000)
-                raise RuntimeError(f"ответ обрезан по лимиту токенов, увеличиваю до {cur_max_tokens} и повторяю")
-            txt = resp["content"][0]["text"]
+            if fetch is not None:
+                # Внешний движок (Gemini) — ОДИН запрос; _gemini сам перебирает модели на 429/503.
+                txt = fetch(prompt, maxt=str(cur_max_tokens), temp=0.2, t=120)
+            else:
+                body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": cur_max_tokens,
+                                    "messages": [{"role": "user", "content": prompt}]}).encode()
+                r = get("https://api.anthropic.com/v1/messages",
+                        hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                        data=body, t=300)  # 300с: на 1000+ отзывов генерация ответа дольше 90с (был таймаут → 10 ретраев → падение)
+                resp = json.loads(r)
+                if resp.get("stop_reason") == "max_tokens":
+                    cur_max_tokens = min(cur_max_tokens * 2, 32000)
+                    raise RuntimeError(f"ответ обрезан по лимиту токенов, увеличиваю до {cur_max_tokens} и повторяю")
+                txt = resp["content"][0]["text"]
             txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
             m = re.search(r"\{.*\}", txt, re.S)
+            if not m: raise ValueError("no json в ответе модели")
             raw = json.loads(m.group(0))
             break
         except Exception as e:
-            last_err = e
-            print(f"claude_analyze попытка {attempt+1}/{ATTEMPTS} провалилась (max_tokens={cur_max_tokens}): {repr(e)[:200]}")
-            if attempt < ATTEMPTS - 1: time.sleep(10)
+            last_err = e; er = repr(e)
+            # 403/401 у внешнего движка — это доступ, повтор не поможет, сразу наружу (к след. движку цепочки)
+            if fetch is not None and any(w in er for w in ("403", "401", "PermissionDenied", "Forbidden")): break
+            # нет/обрезан JSON — на след. попытке даём больше токенов
+            if any(w in er for w in ("no json", "Expecting value", "Extra data", "Unterminated")):
+                cur_max_tokens = min(cur_max_tokens * 2, 32000)
+            print(f"{eng}_analyze попытка {attempt+1}/{ATTEMPTS} (max_tokens={cur_max_tokens}): {repr(e)[:200]}")
+            # 429/503/перегрузка — ждём дольше (лимит/минуту сбросится), иначе короткая пауза
+            if attempt < ATTEMPTS - 1: time.sleep(20 if any(w in er for w in ("429", "503", "Unavailable", "overload")) else 8)
     else:
-        raise RuntimeError(f"claude_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
+        raise RuntimeError(f"{eng}_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
     # Значимость темы (10+ за месяц) считаем ТОЛЬКО кодом. Полный текст жалоб/похвал (вся история)
     # идёт на подсчёт реального числа для КАЖДОЙ темы — она всегда попадает в вывод явным числом.
     result = _enforce_scale(raw, total, neg_month, neg, pos)
