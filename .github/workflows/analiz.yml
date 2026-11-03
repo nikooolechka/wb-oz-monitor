@@ -30,5 +30,6 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
           MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
           WORDSTAT_API_KEY: ${{ secrets.WORDSTAT_API_KEY }}
+          GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           ANALIZ_MODE: ${{ github.event.inputs.mode }}
         run: python analiz_process.py
