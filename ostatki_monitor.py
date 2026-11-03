@@ -20,6 +20,11 @@ def n1c(s):
     s=str(s if s is not None else "").strip().split(",")[0]; s=re.sub(r"[^\d]","",s); return int(s) if s else 0
 def article(name):
     n=name.lower()
+    # НОВЫЙ АРТИКУЛ (2026-11-03): «набор для ухода за зубами животных (гель, паста, спрей)».
+    # ПЕРВЫМ — иначе ниже "паста" схватит как Zub_pasta_det. «набор»+«животн» уникальны:
+    # списанные Dental100_Animal (салфетки)/Lapomoyka и Irrigator_1000_nabor3 сюда НЕ попадут.
+    if ("набор" in n) and ("животн" in n):
+        return "animal_nabor"
     if "экстракт" in n and "купан" in n:
         if "ромашк" in n: return "extract_romashka"
         if "пихт" in n: return "extract_pihta"
