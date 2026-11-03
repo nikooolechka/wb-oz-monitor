@@ -29,4 +29,5 @@ jobs:
           MAILRU_APP_PASS: ${{ secrets.MAILRU_APP_PASS }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
+          KEEP_RECIPE_EMAIL: "1"   # оставить пятничное письмо рецептур в INBOX (сверка animal_nabor); убрать после проверки
         run: python recipes_1c.py
