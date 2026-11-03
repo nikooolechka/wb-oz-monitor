@@ -23,6 +23,7 @@
     "OptikaSpray_new",
     "Oral_cherry",
     "Zub_pasta_det",
+    "animal_nabor",
     "cryolipolysis25",
     "extract_pihta",
     "extract_romashka",
@@ -282,6 +283,14 @@
     "ВБ|Irrigator_1000_nabor3": {
       "ref": "18х18х26",
       "last": "18х18х26"
+    },
+    "ВБ|animal_nabor": {
+      "ref": "100х120х40",
+      "last": "100х120х40"
+    },
+    "ОЗОН|animal_nabor": {
+      "ref": "100х120х40",
+      "last": "100х120х40"
     }
   }
 }
