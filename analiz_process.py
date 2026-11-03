@@ -452,6 +452,145 @@ def build_wordstat(phrase, adjacent):
     return {"phrase": phrase, "monthly": monthly, "avg": avg_main, "trend_pct": tp,
             "adjacent": adj, "region": "Россия", "_reqs": len(phrases)}
 
+# ---------- Анализ — YandexGPT (российский провайдер, не требует верификации; ОСНОВНОЙ движок) ----------
+# Многопроходный метод: фокусные запросы (отдельно жалобы/похвала) + «критик полноты» вторым проходом —
+# на слабой модели это даёт глубину уровня «не упускаем вторичные темы» (проверено на живой карточке).
+YGPT_KEY = WORDSTAT_KEY            # тот же SA-ключ Яндекс Облака (роль ai.languageModels.user выдана)
+YGPT_FOLDER = WORDSTAT_FOLDER
+YGPT_MODEL = f"gpt://{YGPT_FOLDER}/yandexgpt/latest"   # YandexGPT Pro, последняя версия
+
+def _ygpt(prompt, maxt="8000", temp=0.2, t=120):
+    body = json.dumps({"modelUri": YGPT_MODEL, "completionOptions": {"stream": False, "temperature": temp, "maxTokens": maxt},
+                       "messages": [{"role": "user", "text": prompt}]}).encode()
+    r = get("https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+            hdr={"Authorization": "Api-Key " + YGPT_KEY, "Content-Type": "application/json"}, data=body, t=t)
+    return json.loads(r)["result"]["alternatives"][0]["message"]["text"]
+
+def _ygpt_json(prompt, want="array", retries=3, maxt="8000", temp=0.2):
+    last = None
+    for _ in range(retries):
+        try:
+            txt = re.sub(r"^```json|^```|```$", "", _ygpt(prompt, maxt=maxt, temp=temp).strip(), flags=re.M).strip()
+            m = re.search(r"\[.*\]" if want == "array" else r"\{.*\}", txt, re.S)
+            if not m: raise ValueError("no json")
+            return json.loads(m.group(0))
+        except Exception as e:
+            last = e; time.sleep(4)
+    raise RuntimeError(f"ygpt json fail ({want}): {repr(last)[:150]}")
+
+def _ygpt_themes(kind, name, sample):
+    # kind = "жалоб" | "похвалы". Проход 1 (исчерпывающе) + проход 2 (критик пропущенного) + дедуп.
+    sec = ("скорость и АНОНИМНОСТЬ доставки/упаковки, экономичность расхода, ДЛИТЕЛЬНОСТЬ эффекта, сроки годности, "
+           "удобство флакона/дозатора, сервис продавца, запах/аромат, ощущения партнёра, текстура/материал")
+    p1 = (f"Проанализируй ВСЕ отзывы о товаре «{name}». Выпиши КАЖДУЮ отдельную тему {kind} — ИСЧЕРПЫВАЮЩЕ. "
+          f"ОБЯЗАТЕЛЬНО включи и ВТОРОСТЕПЕННЫЕ/неочевидные темы, если они есть в отзывах (например: {sec}). "
+          "НЕ объединяй разные темы в одну. Если тема встречается хотя бы в паре отзывов — выписывай, не пропусти НИ ОДНОЙ. "
+          "Анализируй ТОЛЬКО этот товар; отзывы явно про другой вариант/вкус/фасовку игнорируй. "
+          'Верни СТРОГО JSON-массив: [{"t":"тема коротко","desc":"суть одним предложением, без чисел"}]. '
+          f"ОТЗЫВЫ: {json.dumps(sample, ensure_ascii=False)}")
+    try: base = _ygpt_json(p1, "array")
+    except Exception: base = []
+    have = [c.get("t") for c in base if isinstance(c, dict) and c.get("t")]
+    p2 = (f"Отзывы о товаре и список уже найденных тем {kind}. Найди ВАЖНЫЕ ПРОПУЩЕННЫЕ темы (есть в отзывах, но нет в списке). "
+          f"УЖЕ НАЙДЕНО: {json.dumps(have, ensure_ascii=False)}. "
+          'Верни СТРОГО JSON-массив ТОЛЬКО пропущенных: [{"t":"тема","desc":"одним предложением"}]. Если всё найдено — []. '
+          f"ОТЗЫВЫ: {json.dumps(sample, ensure_ascii=False)}")
+    try: extra = _ygpt_json(p2, "array")
+    except Exception: extra = []
+    seen = set(); out = []
+    for c in list(base) + list(extra or []):
+        if not isinstance(c, dict) or not c.get("t"): continue
+        key = frozenset(_stems(c["t"]))
+        if key and key in seen: continue
+        if key: seen.add(key)
+        out.append({"t": c.get("t"), "desc": c.get("desc") or ""})
+    return out
+
+def ygpt_analyze(data):
+    """ОСНОВНОЙ анализ на YandexGPT. Возвращает ту же структуру, что раньше возвращал claude_analyze
+    (ca/category/complaints/praise/gaps/ideal/niche_terms/wordstat_terms/questions_analysis),
+    поэтому _enforce_scale и вся цепочка ниже работают без изменений."""
+    questions = data.get("questions") or []
+    q_s = [{"q": (x.get("t") or "")[:300], "ans": bool(x.get("a"))} for x in questions[:40] if x.get("t")]
+    q_total = len(q_s)
+    revs = data.get("reviews") or []
+    revs_month = _recent_reviews(revs, 30)
+    total = data.get("reviews_total") or len(revs) or 1
+    def _jt(r, neg=False):
+        s = r.get("t", "") or ""
+        if neg and r.get("m"): s += " | минусы: " + r["m"]
+        if (not neg) and r.get("p"): s += " | " + r["p"]
+        return s
+    neg = [_jt(r, True) for r in revs if (r.get("s") or 5) <= 3 and (r.get("t") or r.get("m"))]
+    pos = [_jt(r) for r in revs if (r.get("s") or 0) >= 4 and (r.get("t") or r.get("p"))]
+    neg_month = [_jt(r, True) for r in revs_month if (r.get("s") or 5) <= 3]
+    neg_s = [x[:300] for x in neg[:80]]; pos_s = [x[:250] for x in pos[:80]]
+    name = data.get("name") or ""
+    descr = (data.get("description") or "")[:1500]
+
+    # Мета-запрос: аудитория, категория, обещания продавца, слова ниши (для MPStats), слова Вордстата, анализ вопросов.
+    meta_prompt = f"""Ты аналитик маркетплейсов. По товару ниже верни СТРОГО валидный JSON (без markdown):
+ТОВАР: {name}
+ОПИСАНИЕ ПРОДАВЦА: {descr}
+ВОПРОСЫ ПОКУПАТЕЛЕЙ (что спрашивают до покупки): {json.dumps(q_s, ensure_ascii=False)}
+УЖЕ ИСПОЛЬЗУЕМЫЕ КАТЕГОРИИ ДАШБОРДА: {json.dumps(_existing_categories(), ensure_ascii=False)}
+Схема:
+{{"ca":"кто покупает и зачем, 1-2 предложения",
+"category":"короткая категория товара 2-4 слова (переиспользуй подходящую из списка дословно, иначе придумай в том же стиле)",
+"seller_claims":["что продавец обещает в карточке, 4-6 пунктов"],
+"niche_label":"тип товара как его ищет покупатель, 2-5 слов",
+"niche_include_type":["слова ФОРМЫ товара корнями: салфет/жидкост/спрей/гел/паст/крем…"],
+"niche_include_context":["слова НАЗНАЧЕНИЯ корнями: зуб/десен/ирригатор/минет/похудени…"],
+"niche_exclude":["слова ДРУГИХ смежных типов товара"],
+"niche_aud_exclude":["слова ЧУЖОЙ аудитории под этот товар (детский→убрать животных/18+; 18+→убрать детское)"],
+"wordstat_phrase":"тип товара чистой фразой в именительном падеже, без бренда/фасовки",
+"wordstat_adjacent":["смежный тип 1","смежный тип 2","смежный тип 3"],
+"questions_analysis":{{"topics":[{{"t":"тема вопроса","desc":"что хотят узнать"}}],"card_gaps":["что добавить в карточку, раз об этом спрашивают"]}} }}
+Если вопросов нет — questions_analysis: null. Без воды, только по этому товару."""
+
+    import concurrent.futures as _cf
+    with _cf.ThreadPoolExecutor(max_workers=3) as ex:
+        f_comp = ex.submit(_ygpt_themes, "жалоб", name, neg_s)
+        f_prai = ex.submit(_ygpt_themes, "похвалы", name, pos_s)
+        f_meta = ex.submit(_ygpt_json, meta_prompt, "object", 3, "8000", 0.3)
+        try: complaints = f_comp.result()
+        except Exception: complaints = []
+        try: praise = f_prai.result()
+        except Exception: praise = []
+        try: meta = f_meta.result()
+        except Exception: meta = {}
+
+    # gaps + ideal — на основе найденных тем жалоб/похвалы и описания продавца.
+    comp_titles = [c.get("t") for c in complaints if c.get("t")]
+    gi_prompt = f"""Ты аналитик маркетплейсов. По товару «{name}» верни СТРОГО JSON (без markdown).
+ОПИСАНИЕ ПРОДАВЦА: {descr}
+ТЕМЫ ЖАЛОБ (из отзывов): {json.dumps(comp_titles, ensure_ascii=False)}
+ТЕМЫ ПОХВАЛЫ: {json.dumps([p.get('t') for p in praise if p.get('t')], ensure_ascii=False)}
+Схема:
+{{"gaps":[{{"claim":"что заявлено в карточке","reality":"что по отзывам на деле"}}],
+"ideal":[{{"text":"конкретная применимая рекомендация как улучшить товар ИЛИ карточку","scope":"recipe (меняет состав/вкус/материал) или fix (упаковка/инфографика/позиционирование/контроль качества/доп-SKU)","based_on":["тема жалобы, на которой основан пункт (из списка выше), или пусто"]}}]}}
+Дай МИНИМУМ 5-7 пунктов ideal (конкретных, что именно сделать — бейджи на фото, инфографика, инструкция, доп-SKU и т.д.). Формулируй коротко и по делу."""
+    try: gi = _ygpt_json(gi_prompt, "object", 3)
+    except Exception: gi = {}
+
+    raw = {"ca": meta.get("ca", ""), "category": meta.get("category", ""),
+           "seller_claims": meta.get("seller_claims") or [],
+           "praise": praise, "complaints": complaints,
+           "gaps": gi.get("gaps") or [], "ideal": gi.get("ideal") or []}
+    result = _enforce_scale(raw, total, neg_month, neg, pos)
+    qa = meta.get("questions_analysis")
+    if isinstance(qa, dict): qa.pop("summary", None)
+    if qa and (qa.get("topics") or qa.get("card_gaps")):
+        result["questions_analysis"] = qa; result["questions_total"] = q_total
+    result["niche_terms"] = {"label": meta.get("niche_label"),
+                             "include_type": meta.get("niche_include_type") or [],
+                             "include_context": meta.get("niche_include_context") or [],
+                             "exclude": meta.get("niche_exclude") or [], "aud_exclude": meta.get("niche_aud_exclude") or []}
+    result["wordstat_terms"] = {"phrase": (meta.get("wordstat_phrase") or "").strip(),
+                                "adjacent": meta.get("wordstat_adjacent") or []}
+    return result
+
+
 def claude_analyze(data):
     # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
     questions = data.get("questions") or []
@@ -924,98 +1063,6 @@ def card_png(d, path):
                 dr.text((ix,iy),ln,font=_font(400,24),fill=(255,220,224)); iy+=31
     img.save(path,"PNG")
 
-# ---------- Категория для фильтра дашборда (отдельный шаг, владелец 2026-10-28) ----------
-# Было: ИИ видел только НАЗВАНИЯ категорий + «если подходит — бери дословно» -> натягивал ближайшую
-# («Индикатор зубного налёта» -> «Детские денталы», оральный спрей 18+ и интим-салфетки -> одна категория).
-# Стало: ИИ видит, КАКИЕ товары уже лежат в каждой категории, и кладёт туда только ПРЯМУЮ ЗАМЕНУ им.
-# Не жёсткий справочник — категории складываются сами из разобранных товаров.
-def _category_map(products=None, exclude_id=None):
-    if products is None:
-        try:
-            products = json.loads(get("https://raw.githubusercontent.com/" + DASH_REPO + "/main/docs/analiz_data.json", t=15)).get("products", [])
-        except Exception:
-            products = []
-    m = {}
-    for p in products:
-        if p.get("id") == exclude_id or not p.get("category"):
-            continue
-        m.setdefault(p["category"], []).append((p.get("name") or "")[:90])
-    return {k: v[:6] for k, v in m.items()}
-
-def categorize(name, brand="", desc="", niche="", cat_map=None, current=None):
-    """Категория товара для фильтра дашборда. None — если ИИ не ответил (тогда остаётся категория из общего разбора)."""
-    if not ANTHROPIC_KEY:
-        return None
-    if cat_map is None:
-        cat_map = _category_map()
-    prompt = f"""Ты раскладываешь товары по категориям фильтра на дашборде анализа карточек маркетплейсов.
-
-ТОВАР: {name}
-БРЕНД: {brand}
-НИША (как ищут): {niche}
-ОПИСАНИЕ: {(desc or '')[:900]}
-{("СЕЙЧАС У ТОВАРА КАТЕГОРИЯ: «" + current + "». Если она по правилам ниже верна (товар — прямая замена тем, кто в ней лежит), ОСТАВЬ ЭТО НАЗВАНИЕ дословно. Меняй, только если товар туда реально не подходит.") if current else ""}
-
-УЖЕ ЕСТЬ КАТЕГОРИИ (в скобках — товары, которые в них лежат):
-{json.dumps(cat_map, ensure_ascii=False, indent=1) if cat_map else "пока нет ни одной"}
-
-ПРАВИЛА:
-1. Категория = ТИП ТОВАРА, как раздел магазина: что это физически (форма: салфетки, паста, спрей, гель, крем, жидкость, индикатор, набор…) + для чего + для кого, если аудитория меняет сам тип (детские салфетки для зубов ≠ взрослые).
-2. В существующую категорию клади, ТОЛЬКО если товар — ПРЯМАЯ ЗАМЕНА товарам, которые в ней уже лежат: покупатель выбирал бы между ними. Сверяй с товарами в скобках, а не с названием категории.
-3. Общий ингредиент (ксилит, гиалуронка), общая тема (зубы, интим, уход) или общая аудитория — НЕ повод класть вместе. Пример: индикатор зубного налёта — не салфетки для зубов; оральный спрей 18+ — не салфетки для интимной гигиены.
-4. Сомневаешься — заводи новую категорию.
-5. Новая категория: 2-4 слова по-русски, без бренда, вкуса, объёма и числа штук. Не слишком узко (вкус/фасовка — не категория) и не слишком широко («Гигиена», «Уход» — плохо).
-
-Верни СТРОГО JSON без markdown: {{"category":"…","decision":"existing|new","why":"одна короткая фраза"}}"""
-    body = json.dumps({"model": "claude-sonnet-4-5-20250929", "max_tokens": 300, "temperature": 0,
-                       "messages": [{"role": "user", "content": prompt}]}).encode()
-    for attempt in range(3):
-        try:
-            r = json.loads(get("https://api.anthropic.com/v1/messages",
-                               hdr={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                               data=body, t=90))
-            txt = r["content"][0]["text"]
-            j = json.loads(re.search(r"\{.*\}", txt, re.S).group(0))
-            cat = (j.get("category") or "").strip()
-            if cat:
-                print(f"категория: {cat} ({j.get('decision')}; {j.get('why')})")
-                return cat
-        except Exception as e:
-            print(f"categorize попытка {attempt+1}/3: {repr(e)[:150]}")
-            time.sleep(5)
-    return None
-
-def recategorize_all(dry=False):
-    """Пересортировать ВСЕ товары дашборда тем же правилом. Категории строятся заново по порядку анализа
-       (старые -> новые): каждый товар видит категории уже пересортированных. Пишет только поле category."""
-    api = f"https://api.github.com/repos/{DASH_REPO}/contents/docs/analiz_data.json"
-    h = {"Authorization": "Bearer " + GH_PAT, "Accept": "application/vnd.github+json", "User-Agent": "analiz"}
-    cur = json.loads(base64.b64decode(json.loads(get(api, hdr=h))["content"]).decode())
-    prods = cur.get("products", [])
-    done, newcat = [], {}
-    for p in reversed(prods):
-        nt = p.get("niche") if isinstance(p.get("niche"), str) else ""
-        cat = categorize(p.get("name", ""), p.get("brand", ""), p.get("description", "") or p.get("ca", ""), nt,
-                         _category_map(done), current=p.get("category"))
-        newcat[p["id"]] = cat or p.get("category")
-        done.append({**p, "category": newcat[p["id"]]})
-    r = json.loads(get(api, hdr=h))                      # свежий sha: могли добавиться товары
-    cur = json.loads(base64.b64decode(r["content"]).decode())
-    changes = []
-    for p in cur.get("products", []):
-        if p["id"] in newcat and newcat[p["id"]] and newcat[p["id"]] != p.get("category"):
-            changes.append((p.get("name", "")[:60], p.get("category"), newcat[p["id"]]))
-            p["category"] = newcat[p["id"]]
-    for n, a, b in changes:
-        print(f"ПЕРЕСОРТ: {n} | {a} -> {b}")
-    if changes and not dry:
-        body = {"message": f"анализ: пересортировка категорий ({len(changes)})",
-                "content": base64.b64encode(json.dumps(cur, ensure_ascii=False, indent=1).encode()).decode(), "sha": r["sha"]}
-        urllib.request.urlopen(urllib.request.Request(api, data=json.dumps(body).encode(), method="PUT",
-                                                      headers={**h, "Content-Type": "application/json"}))
-    print("пересортировано:", len(changes), "из", len(prods))
-    return changes
-
 # ---------- Обновление дашборда (docs/analiz_data.json в pages-репо) ----------
 def update_dashboard(entry):
     api=f"https://api.github.com/repos/{DASH_REPO}/contents/docs/analiz_data.json"
@@ -1142,15 +1189,15 @@ def process_one():
             tg_msg(chat,"👻Почти собрал, но не подтянулось фото товара. Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
             tg_msg(OWNER_CHAT,"бот аналитик: не собралось фото товара после ретраев, не опубликовал (неполный анализ недопустим)")
             data=None
-        elif not ANTHROPIC_KEY:
+        elif not YGPT_KEY:
             tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
             an = None
         else:
             try:
-                an = claude_analyze(data)
+                an = ygpt_analyze(data)   # основной движок — YandexGPT (не зависит от Anthropic/верификации)
             except Exception as e:
                 import traceback
-                print("claude_analyze FAILED даже после ретраев:", repr(e)[:400])
+                print("ygpt_analyze FAILED даже после ретраев:", repr(e)[:400])
                 traceback.print_exc()
                 # НИКОГДА не публикуем фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП"
                 # недопустимы для ЛЮБОГО товара) — честно сообщаем и просим повторить.
@@ -1158,11 +1205,6 @@ def process_one():
                 an = None
         if data and an is not None:
             nterms = an.pop("niche_terms", None)  # внутреннее: слова ниши для MPStats, в карточку не идёт
-            _cat = categorize(data.get("name", ""), data.get("brand", ""), data.get("description", ""),
-                              (nterms or {}).get("label") or "",
-                              _category_map(exclude_id=f"{data['platform'].lower()}-{data.get('nm') or data.get('pid')}"))
-            if _cat:
-                an["category"] = _cat
             wterms = an.pop("wordstat_terms", None)  # внутреннее: чистый тип товара для Вордстата
             st = data.get("stars") or {}
             neg_total = sum(int(st.get(k, 0) or 0) for k in ("1", "2", "3")) if st else 0
@@ -1250,9 +1292,6 @@ def process_one():
     return "done" if lines else "empty"
 
 if __name__ == "__main__":
-    _mode = os.environ.get("ANALIZ_MODE", "") or ("recat" if "--recat" in sys.argv else "")
-    if _mode in ("recat", "recat-dry"):
-        recategorize_all(dry=(_mode == "recat-dry")); sys.exit(0)
     n=0
     while n<5:
         r=process_one()
