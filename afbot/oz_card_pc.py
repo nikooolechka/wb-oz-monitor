@@ -431,8 +431,14 @@ def _get_driver(max_wait=120, interval=10):
 def via_browser():
     drv=_get_driver()
     try:
-        drv.get("https://www.ozon.ru/")
+        # ПРОГРЕВ: даём антиботу Ozon «осесть» (главная -> пауза -> возраст-гейт -> пауза -> скролл).
+        # Ровно такой прогрев пробивал antibot в тесте свежего профиля.
+        drv.get("https://www.ozon.ru/"); time.sleep(3)
         drv.execute_script("return fetch('/api/composer-api.bx/_action/setBirthdate?isAlco=false',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({birthdate:'1990-01-01'})}).then(r=>r.status).catch(e=>0)")
+        time.sleep(2)
+        try: drv.execute_script("window.scrollTo(0,400);")
+        except Exception: pass
+        time.sleep(1)
         def jfetch(path):
             return drv.execute_async_script("var cb=arguments[arguments.length-1];fetch(arguments[0]).then(r=>r.text()).then(t=>cb(t)).catch(e=>cb('ERR'+e))", path)
         # Берём страницу по ПОЛНОМУ адресу с ЧПУ-названием (PRODUCT_PATH) — он однозначно
@@ -474,14 +480,29 @@ def via_browser():
         try: drv.quit()
         except: pass
 
+import shutil as _sh
 res=None; err=[]
-for fn in (via_browser, via_http):
+# ОГРАНИЧЕННЫЙ РЕТРАЙ против вероятностного антибота Ozon: до 6 попыток свежими сессиями
+# ИЛИ пока не истечёт бюджет ~4 мин (НЕ бесконечно — иначе отдаём «не смог», как раньше).
+# На каждую новую попытку чистим профиль (свежий fingerprint пробивал антибот в тесте) + пауза.
+_start=time.time()
+for _att in range(6):
+    if time.time()-_start > 240: break
     try:
-        r=fn()
+        r=via_browser()
         if r.get("name"): res=r; break
-        err.append(fn.__name__+":no name")
+        err.append(f"browser#{_att+1}:no name")
     except Exception as e:
-        err.append(fn.__name__+":"+repr(e)[:80])
+        err.append(f"browser#{_att+1}:"+repr(e)[:60])
+    try: _sh.rmtree(os.path.join(D,"ozprofile_bot"), ignore_errors=True)   # следующая попытка — свежая
+    except Exception: pass
+    time.sleep(6)
+if not res:
+    try:
+        r=via_http()
+        if r.get("name"): res=r
+        else: err.append("http:no name")
+    except Exception as e: err.append("http:"+repr(e)[:60])
 def _enc(o): return base64.b64encode(json.dumps(o,ensure_ascii=False).encode("utf-8")).decode()
 
 def _sheets_write(rng, values):
