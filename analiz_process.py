@@ -643,10 +643,11 @@ def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
     YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
     с перечислением причин (их увидит владелец в личке). Гнилой/пустой результат НЕ принимаем."""
-    # Порядок: Gemini (рабочий сейчас) -> YandexGPT (запасной, оживёт после пересборки) -> Claude.
+    # Порядок: YandexGPT ОСНОВНОЙ (платный, под облаком владельца, без лимитов — тянет любые карточки,
+    # в т.ч. гиганты на 1000+ отзывов) -> Gemini (бесплатный запасной, на лёгких) -> Claude.
     chain = []
-    if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
     if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
+    if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
     if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     errs = []
     for nm, fn in chain:
