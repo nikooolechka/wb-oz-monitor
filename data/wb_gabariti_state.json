@@ -82,8 +82,8 @@
     },
     "Dental20": {
       "status": "high",
-      "wb_vol": 0.273,
-      "pct": 16
+      "wb_vol": 0.294,
+      "pct": 25
     },
     "Dental_20_zemlyanika": {
       "status": "high",
@@ -108,6 +108,21 @@
     "irrigator_new_1": {
       "status": "ok",
       "wb_vol": 2.2,
+      "pct": 0
+    },
+    "makeup_50": {
+      "status": "high",
+      "wb_vol": 1.092,
+      "pct": 18
+    },
+    "extract_romashka": {
+      "status": "ok",
+      "wb_vol": 0.924,
+      "pct": 0
+    },
+    "extract_pihta": {
+      "status": "ok",
+      "wb_vol": 0.924,
       "pct": 0
     }
   }
