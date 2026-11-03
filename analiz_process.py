@@ -342,6 +342,40 @@ def oz_collect(pid, timeout=420, url=None):
             except Exception: return None
     return None
 
+def mpstats_via_pc(platform, sku, url, name, nterms, timeout=300):
+    # MPStats режет зарубежный IP GitHub (401) -> зовём его С ПК (российский IP) через тот же
+    # пультовый канал, что и сбор Ozon: ПК качает mpstats_pc.py из бакета владельца, гоняет и
+    # возвращает MPSTATS64<<base64>>. Токен передаём аргументом (пульт — приватная таблица).
+    if not _pc_heartbeat_fresh():
+        ws = time.time()
+        while time.time() - ws < 900:
+            time.sleep(30)
+            if _pc_heartbeat_fresh(): break
+        else:
+            print("mpstats_via_pc: ПК не отвечает"); return None
+    import uuid
+    nonce = "m" + uuid.uuid4().hex[:12]
+    tok = os.environ.get("MPSTATS_TOKEN", "")
+    nb = base64.b64encode((name or "").encode("utf-8")).decode() if name else "-"
+    ntb = base64.b64encode(json.dumps(nterms or {}, ensure_ascii=False).encode("utf-8")).decode() if nterms else "-"
+    cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+           "irm 'https://storage.yandexcloud.net/asfarm-analiz-pc/mpstats_pc.py' -OutFile \"$d\\mpstats_pc.py\";"
+           f"& $py \"$d\\mpstats_pc.py\" \"{platform}\" \"{sku}\" \"{url}\" \"{nb}\" \"{ntb}\" \"{tok}\" \"{nonce}\" "
+           "2>&1 | Select-String 'MPSTATS64' | Select-Object -Last 1")
+    swrite(PRICE_CMD, cmd)
+    start = time.time()
+    while time.time() - start < timeout:
+        time.sleep(15)
+        a1 = sread(PRICE_LOG)
+        m = re.search(r"MPSTATS64<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
+        if m:
+            try:
+                d = json.loads(base64.b64decode(re.sub(r"\s", "", m.group(1))).decode("utf-8"))
+                if str(d.get("nonce") or "") != nonce: continue   # чужой/старый результат на общем пульте
+                return d.get("mpstats")
+            except Exception: continue
+    print("mpstats_via_pc: таймаут, результата нет"); return None
+
 # ---------- Анализ — Claude (Anthropic API, ключ владельца, $100/мес бесплатных кредитов) ----------
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
 # Порог значимости темы — считается КОДОМ, не зависит от того, послушался ли ИИ инструкции в тексте промпта.
@@ -1357,10 +1391,10 @@ def process_one():
             mpd=None
             for _m in range(3):
                 try:
-                    from analiz_mpstats import build_mpstats
-                    mpd = build_mpstats(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
+                    # MPStats — ТОЛЬКО через ПК (российский IP): из Actions MPStats отдаёт 401.
+                    mpd = mpstats_via_pc(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
                 except Exception as _e:
-                    print("mpstats build failed:", repr(_e)[:200]); mpd=None
+                    print("mpstats via pc failed:", repr(_e)[:200]); mpd=None
                 if _mp_ok(mpd): break
                 if _m<2:
                     print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
