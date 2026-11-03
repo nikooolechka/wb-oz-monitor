@@ -466,19 +466,31 @@ def _ygpt(prompt, maxt="8000", temp=0.2, t=120):
             hdr={"Authorization": "Api-Key " + YGPT_KEY, "Content-Type": "application/json"}, data=body, t=t)
     return json.loads(r)["result"]["alternatives"][0]["message"]["text"]
 
-def _ygpt_json(prompt, want="array", retries=3, maxt="8000", temp=0.2):
+# ---------- Gemini (Google) — запасной движок, работает из облака, без верификации ----------
+GEMINI_KEY = os.environ.get("GEMINI_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+def _gemini(prompt, maxt="8000", temp=0.2, t=180):
+    body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                       "generationConfig": {"temperature": temp, "maxOutputTokens": int(maxt)}}).encode()
+    r = get(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}",
+            hdr={"Content-Type": "application/json"}, data=body, t=t)
+    d = json.loads(r)
+    return d["candidates"][0]["content"]["parts"][0]["text"]
+
+def _ygpt_json(prompt, want="array", retries=3, maxt="8000", temp=0.2, call=None):
+    call = call or _ygpt
     last = None
     for _ in range(retries):
         try:
-            txt = re.sub(r"^```json|^```|```$", "", _ygpt(prompt, maxt=maxt, temp=temp).strip(), flags=re.M).strip()
+            txt = re.sub(r"^```json|^```|```$", "", call(prompt, maxt=maxt, temp=temp).strip(), flags=re.M).strip()
             m = re.search(r"\[.*\]" if want == "array" else r"\{.*\}", txt, re.S)
             if not m: raise ValueError("no json")
             return json.loads(m.group(0))
         except Exception as e:
             last = e; time.sleep(4)
-    raise RuntimeError(f"ygpt json fail ({want}): {repr(last)[:150]}")
+    raise RuntimeError(f"llm json fail ({want}): {repr(last)[:150]}")
 
-def _ygpt_themes(kind, name, sample):
+def _ygpt_themes(kind, name, sample, call=None):
     # kind = "жалоб" | "похвалы". Проход 1 (исчерпывающе) + проход 2 (критик пропущенного) + дедуп.
     sec = ("скорость и АНОНИМНОСТЬ доставки/упаковки, экономичность расхода, ДЛИТЕЛЬНОСТЬ эффекта, сроки годности, "
            "удобство флакона/дозатора, сервис продавца, запах/аромат, ощущения партнёра, текстура/материал")
@@ -488,14 +500,14 @@ def _ygpt_themes(kind, name, sample):
           "Анализируй ТОЛЬКО этот товар; отзывы явно про другой вариант/вкус/фасовку игнорируй. "
           'Верни СТРОГО JSON-массив: [{"t":"тема коротко","desc":"суть одним предложением, без чисел"}]. '
           f"ОТЗЫВЫ: {json.dumps(sample, ensure_ascii=False)}")
-    try: base = _ygpt_json(p1, "array")
+    try: base = _ygpt_json(p1, "array", call=call)
     except Exception: base = []
     have = [c.get("t") for c in base if isinstance(c, dict) and c.get("t")]
     p2 = (f"Отзывы о товаре и список уже найденных тем {kind}. Найди ВАЖНЫЕ ПРОПУЩЕННЫЕ темы (есть в отзывах, но нет в списке). "
           f"УЖЕ НАЙДЕНО: {json.dumps(have, ensure_ascii=False)}. "
           'Верни СТРОГО JSON-массив ТОЛЬКО пропущенных: [{"t":"тема","desc":"одним предложением"}]. Если всё найдено — []. '
           f"ОТЗЫВЫ: {json.dumps(sample, ensure_ascii=False)}")
-    try: extra = _ygpt_json(p2, "array")
+    try: extra = _ygpt_json(p2, "array", call=call)
     except Exception: extra = []
     seen = set(); out = []
     for c in list(base) + list(extra or []):
@@ -506,7 +518,8 @@ def _ygpt_themes(kind, name, sample):
         out.append({"t": c.get("t"), "desc": c.get("desc") or ""})
     return out
 
-def ygpt_analyze(data):
+def ygpt_analyze(data, call=None):
+    call = call or _ygpt
     """ОСНОВНОЙ анализ на YandexGPT. Возвращает ту же структуру, что раньше возвращал claude_analyze
     (ca/category/complaints/praise/gaps/ideal/niche_terms/wordstat_terms/questions_analysis),
     поэтому _enforce_scale и вся цепочка ниже работают без изменений."""
@@ -550,15 +563,14 @@ def ygpt_analyze(data):
 
     import concurrent.futures as _cf
     with _cf.ThreadPoolExecutor(max_workers=3) as ex:
-        f_comp = ex.submit(_ygpt_themes, "жалоб", name, neg_s)
-        f_prai = ex.submit(_ygpt_themes, "похвалы", name, pos_s)
-        f_meta = ex.submit(_ygpt_json, meta_prompt, "object", 3, "8000", 0.3)
+        f_comp = ex.submit(_ygpt_themes, "жалоб", name, neg_s, call)
+        f_prai = ex.submit(_ygpt_themes, "похвалы", name, pos_s, call)
+        f_meta = ex.submit(_ygpt_json, meta_prompt, "object", 3, "8000", 0.3, call)
         try: complaints = f_comp.result()
         except Exception: complaints = []
         try: praise = f_prai.result()
         except Exception: praise = []
-        try: meta = f_meta.result()
-        except Exception: meta = {}
+        meta = f_meta.result()   # если мета упала (напр. 403) — исключение проброс -> карточка НЕ публикуется гнилой
 
     # gaps + ideal — на основе найденных тем жалоб/похвалы и описания продавца.
     comp_titles = [c.get("t") for c in complaints if c.get("t")]
@@ -570,7 +582,7 @@ def ygpt_analyze(data):
 {{"gaps":[{{"claim":"что заявлено в карточке","reality":"что по отзывам на деле"}}],
 "ideal":[{{"text":"конкретная применимая рекомендация как улучшить товар ИЛИ карточку","scope":"recipe (меняет состав/вкус/материал) или fix (упаковка/инфографика/позиционирование/контроль качества/доп-SKU)","based_on":["тема жалобы, на которой основан пункт (из списка выше), или пусто"]}}]}}
 Дай МИНИМУМ 5-7 пунктов ideal (конкретных, что именно сделать — бейджи на фото, инфографика, инструкция, доп-SKU и т.д.). Формулируй коротко и по делу."""
-    try: gi = _ygpt_json(gi_prompt, "object", 3)
+    try: gi = _ygpt_json(gi_prompt, "object", 3, call=call)
     except Exception: gi = {}
 
     raw = {"ca": meta.get("ca", ""), "category": meta.get("category", ""),
@@ -589,6 +601,32 @@ def ygpt_analyze(data):
     result["wordstat_terms"] = {"phrase": (meta.get("wordstat_phrase") or "").strip(),
                                 "adjacent": meta.get("wordstat_adjacent") or []}
     return result
+
+def gemini_analyze(data):
+    # Тот же многопроходный метод, но через Gemini (Google). Запасной движок.
+    return ygpt_analyze(data, call=_gemini)
+
+def run_analysis(data):
+    """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
+    YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
+    с перечислением причин (их увидит владелец в личке). Гнилой/пустой результат НЕ принимаем."""
+    chain = []
+    if YGPT_KEY: chain.append(("YandexGPT", lambda: ygpt_analyze(data, call=_ygpt)))
+    if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
+    if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
+    errs = []
+    for nm, fn in chain:
+        try:
+            r = fn(data)
+            # приёмка: должны быть основные поля (иначе движок отдал дыру)
+            if r and r.get("ca") and r.get("category") and (r.get("complaints") is not None):
+                print(f"анализ: сработал {nm}")
+                return r, nm
+            errs.append(f"{nm}: пустой/неполный результат")
+        except Exception as e:
+            errs.append(f"{nm}: {repr(e)[:120]}")
+            print(f"анализ: {nm} упал — {repr(e)[:150]}")
+    raise RuntimeError("все движки ИИ недоступны -> " + " | ".join(errs))
 
 
 def claude_analyze(data):
@@ -1171,7 +1209,7 @@ def process_one():
             data=None
         elif data and data.get("_wrong_variant"):
             tg_msg(chat,"👻УПС - Ozon сейчас открывает по этой ссылке другой вариант товара, а не запрошенный. Чтобы не выдать анализ не того товара, не публикую. Пришли ссылку ещё раз чуть позже.")
-            tg_msg(OWNER_CHAT,"бот аналитик: Ozon подменил вариант товара, не опубликовал")
+            tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: Ozon подменил вариант товара, не опубликовал\n{url}")
             data=None
         elif not data:
             tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
@@ -1181,27 +1219,29 @@ def process_one():
             # карточка не загрузилась → сбой сборщика (антибот/занятый браузер) → честный отказ.
             # ЧЕСТНЫЙ 0 (пул собран, но по этому itemId 0 отзывов) — сюда НЕ попадает, публикуется ниже.
             tg_msg(chat,"👻УПС - что то сломалось\nСобрал карточку, но не смог собрать отзывы/рейтинг. Пришли ссылку ещё раз чуть позже.")
-            tg_msg(OWNER_CHAT,"бот аналитик сломался, нужна починка")
+            tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: собрал карточку, но не отзывы/рейтинг (сбой сборщика)\n{url}")
             data=None
         elif not _photo_ok(data.get("photo")):
             # Фото товара ОБЯЗАТЕЛЬНО. Неполный анализ (без фото) НЕ публикуем даже после ретраев —
             # честно просим повторить, чтобы собрать всё (владелец, 2026-10-24).
             tg_msg(chat,"👻Почти собрал, но не подтянулось фото товара. Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
-            tg_msg(OWNER_CHAT,"бот аналитик: не собралось фото товара после ретраев, не опубликовал (неполный анализ недопустим)")
+            tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: не подтянулось фото товара, не опубликовал\n{url}")
             data=None
-        elif not YGPT_KEY:
-            tg_msg(chat,"ИИ-анализ недоступен (нет ключа) — товар не публикую, чтобы не выдумывать выводы.")
+        elif not (YGPT_KEY or GEMINI_KEY or ANTHROPIC_KEY):
+            tg_msg(chat,"ИИ-анализ недоступен (нет ни одного ключа) — товар не публикую.")
+            tg_msg(OWNER_CHAT,"🔴 Бот-аналитик: НЕТ НИ ОДНОГО ключа ИИ (YandexGPT/Gemini/Claude). Разбор невозможен.")
             an = None
         else:
             try:
-                an = ygpt_analyze(data)   # основной движок — YandexGPT (не зависит от Anthropic/верификации)
+                # ФОЛБЭК-ЦЕПОЧКА: YandexGPT -> Gemini -> Claude. Хоть какой-то отработает.
+                an, _prov = run_analysis(data)
             except Exception as e:
                 import traceback
-                print("ygpt_analyze FAILED даже после ретраев:", repr(e)[:400])
-                traceback.print_exc()
-                # НИКОГДА не публикуем фальшивый нишевой fallback (владелец, 2026-10-22: "зашитые УТП"
-                # недопустимы для ЛЮБОГО товара) — честно сообщаем и просим повторить.
-                tg_msg(chat,"Не смог сделать разбор — ИИ не ответил после 10 попыток. Пришли ссылку ещё раз чуть позже.")
+                print("run_analysis FAILED (все движки):", repr(e)[:500]); traceback.print_exc()
+                # НИКОГДА не публикуем фальшивку — честно сообщаем. И ТЕБЕ в личку ТОЧНУЮ причину,
+                # чтобы ты видела что сломалось, даже если ссылку кидал другой человек.
+                tg_msg(chat,"Не смог сделать разбор — ИИ сейчас недоступен. Пришли ссылку ещё раз чуть позже.")
+                tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик НЕ собрал карточку (все движки ИИ упали)\n{url}\nПричина: {repr(e)[:300]}")
                 an = None
         if data and an is not None:
             nterms = an.pop("niche_terms", None)  # внутреннее: слова ниши для MPStats, в карточку не идёт
@@ -1285,7 +1325,7 @@ def process_one():
             else:
                 _wd_th.join(timeout=2)  # не бросаем поток висеть
                 tg_msg(chat,"👻Почти готово: разобрал карточку и отзывы, но не собралась аналитика MPStats (продажи/ниша). Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
-                tg_msg(OWNER_CHAT,"бот аналитик: MPStats-разделы не собрались после ретраев, не опубликовал (неполный анализ недопустим)")
+                tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: MPStats-разделы не собрались, не опубликовал\n{url}")
     finally:
         q2=sread(QUEUE_CELL); rest=[x for x in q2.split("\n") if x.strip() and not x.startswith(msgid+"|")]
         swrite(QUEUE_CELL,"\n".join(rest)); swrite(BUSY_CELL,"")
