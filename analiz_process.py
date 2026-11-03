@@ -468,16 +468,18 @@ def _ygpt(prompt, maxt="8000", temp=0.2, t=120):
 
 # ---------- Gemini (Google) — запасной движок, работает из облака, без верификации ----------
 GEMINI_KEY = os.environ.get("GEMINI_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-def _gemini(prompt, maxt="8000", temp=0.2, t=180):
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")  # у flash-latest нет free-квоты->429; preview нестабилен->503; 3.6-flash стабилен, free-квота есть
+def _gemini(prompt, maxt="8000", temp=0.2, t=120):
+    # thinkingBudget:0 — ОТКЛЮЧАЕМ «размышления» gemini-3.x, иначе на больших промптах таймаут.
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"temperature": temp, "maxOutputTokens": int(maxt)}}).encode()
+                       "generationConfig": {"temperature": temp, "maxOutputTokens": int(maxt),
+                                            "thinkingConfig": {"thinkingBudget": 0}}}).encode()
     r = get(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_KEY}",
             hdr={"Content-Type": "application/json"}, data=body, t=t)
     d = json.loads(r)
     return d["candidates"][0]["content"]["parts"][0]["text"]
 
-def _ygpt_json(prompt, want="array", retries=3, maxt="8000", temp=0.2, call=None):
+def _ygpt_json(prompt, want="array", retries=6, maxt="8000", temp=0.2, call=None):
     call = call or _ygpt
     last = None
     for _ in range(retries):
@@ -487,7 +489,12 @@ def _ygpt_json(prompt, want="array", retries=3, maxt="8000", temp=0.2, call=None
             if not m: raise ValueError("no json")
             return json.loads(m.group(0))
         except Exception as e:
-            last = e; time.sleep(4)
+            last = e
+            er = repr(e)
+            # 403/401/нет доступа — это НАВСЕГДА, не ретраим (чтобы не тормозить фолбэк на след. движок)
+            if any(w in er for w in ("403", "401", "Forbidden", "PermissionDenied", "permission")): break
+            # 429 (лимит/мин) и 503/500 (перегрузка модели) — ждём дольше, сервис обычно освобождается
+            time.sleep(22 if any(w in er for w in ("429", "503", "500", "overload", "Unavailable")) else 4)
     raise RuntimeError(f"llm json fail ({want}): {repr(last)[:150]}")
 
 def _ygpt_themes(kind, name, sample, call=None):
@@ -561,8 +568,11 @@ def ygpt_analyze(data, call=None):
 "questions_analysis":{{"topics":[{{"t":"тема вопроса","desc":"что хотят узнать"}}],"card_gaps":["что добавить в карточку, раз об этом спрашивают"]}} }}
 Если вопросов нет — questions_analysis: null. Без воды, только по этому товару."""
 
+    # Gemini (бесплатный) бьёт лимит запросов/мин при залпе — у него запросы ПО ОЧЕРЕДИ (1 поток);
+    # у YandexGPT лимит выше — параллельно (3 потока), быстрее.
+    _workers = 1 if call is _gemini else 3
     import concurrent.futures as _cf
-    with _cf.ThreadPoolExecutor(max_workers=3) as ex:
+    with _cf.ThreadPoolExecutor(max_workers=_workers) as ex:
         f_comp = ex.submit(_ygpt_themes, "жалоб", name, neg_s, call)
         f_prai = ex.submit(_ygpt_themes, "похвалы", name, pos_s, call)
         f_meta = ex.submit(_ygpt_json, meta_prompt, "object", 3, "8000", 0.3, call)
@@ -577,11 +587,18 @@ def ygpt_analyze(data, call=None):
     gi_prompt = f"""Ты аналитик маркетплейсов. По товару «{name}» верни СТРОГО JSON (без markdown).
 ОПИСАНИЕ ПРОДАВЦА: {descr}
 ТЕМЫ ЖАЛОБ (из отзывов): {json.dumps(comp_titles, ensure_ascii=False)}
-ТЕМЫ ПОХВАЛЫ: {json.dumps([p.get('t') for p in praise if p.get('t')], ensure_ascii=False)}
+ТЕМЫ ПОХВАЛЫ (сильные стороны): {json.dumps([p.get('t') for p in praise if p.get('t')], ensure_ascii=False)}
+ВОПРОСЫ ПОКУПАТЕЛЕЙ ДО ПОКУПКИ (что непонятно из карточки): {json.dumps([x.get('q') for x in q_s], ensure_ascii=False)}
 Схема:
 {{"gaps":[{{"claim":"что заявлено в карточке","reality":"что по отзывам на деле"}}],
-"ideal":[{{"text":"конкретная применимая рекомендация как улучшить товар ИЛИ карточку","scope":"recipe (меняет состав/вкус/материал) или fix (упаковка/инфографика/позиционирование/контроль качества/доп-SKU)","based_on":["тема жалобы, на которой основан пункт (из списка выше), или пусто"]}}]}}
-Дай МИНИМУМ 5-7 пунктов ideal (конкретных, что именно сделать — бейджи на фото, инфографика, инструкция, доп-SKU и т.д.). Формулируй коротко и по делу."""
+"ideal":[{{"text":"конкретная применимая рекомендация как улучшить товар ИЛИ карточку","scope":"recipe (меняет состав/вкус/материал) или fix (упаковка/инфографика/позиционирование/контроль качества/доп-SKU)","based_on":["тема жалобы ИЛИ вопрос, на котором основан пункт, или пусто"]}}]}}
+ОБЯЗАТЕЛЬНО дай НЕ МЕНЬШЕ 5-7 пунктов ideal — это ЖЁСТКОЕ требование, меньше 5 возвращать НЕЛЬЗЯ.
+ВАЖНО: даже если товар хвалят и менять состав НЕ нужно — всё равно дай 5-7 улучшений КАРТОЧКИ и маркетинга (scope:"fix"), а НЕ отписку «менять нечего». Источники пунктов:
+— закрыть КАЖДЫЙ вопрос покупателей инфографикой/текстом в карточке (раз спрашивают — в карточке этого не хватает);
+— усилить подачу сильных сторон из похвалы (вынести на фото/в заголовок бейджами и цифрами из отзывов);
+— снять возражения из жалоб;
+— доп-SKU/наборы/форматы, если уместно.
+Каждый пункт — конкретное действие (какой бейдж, какая инфографика, что в описании), коротко и по делу."""
     try: gi = _ygpt_json(gi_prompt, "object", 3, call=call)
     except Exception: gi = {}
 
