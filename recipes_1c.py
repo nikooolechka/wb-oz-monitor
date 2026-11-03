@@ -111,6 +111,40 @@ def code_for(cell):
     return None, None
 
 
+# НАБОРЫ (несколько рецептур-единиц в одной карточке): артикул -> список (ярлык, слово-тип единицы).
+# Каждая единица ищется в рецептурах по: слово-тип + признак «для животных». Составы/свойства/
+# применение единиц складываются в S/T/U ЧЕРЕЗ АБЗАЦ с пометкой. (владелец 2026-11-03)
+ANIMAL_WORDS = ("животн", "собак", "кош", "зоо", "питом")
+COMPOSITE = {
+    "animal_nabor": [("Спрей", "спрей"), ("Гель", "гель"), ("Паста", "паст")],
+}
+
+
+def _is_animal(nm):
+    return any(w in nm for w in ANIMAL_WORDS)
+
+
+def composite_fields(units, data):
+    """Для набора: по каждой единице найти рецептуру (слово-тип + «для животных»),
+    собрать значения в {dk: 'Ярлык: текст\\n\\nЯрлык2: ...'}. Вернуть (srcvals, found, missing)."""
+    found, missing = [], []
+    for label, typeword in units:
+        hit = None
+        for code, d in data.items():
+            nm = (d.get("name") or "").lower()
+            if typeword in nm and _is_animal(nm):
+                hit = (label, d); break
+        if hit:
+            found.append(hit)
+        else:
+            missing.append(label)
+    srcvals = {}
+    for _lbl, _col, dk in FIELDS:
+        parts = [f"{lbl}: {d[dk]}" for lbl, d in found if d.get(dk)]
+        srcvals[dk] = "\n\n".join(parts)
+    return srcvals, [l for l, _ in found], missing
+
+
 def imap_connect():
     M = imaplib.IMAP4_SSL(IMAP_HOST, ssl_context=ssl._create_unverified_context())
     M.login(MAIL_USER, MAIL_PASS)
@@ -160,6 +194,7 @@ def parse_1c(path):
             "sostav": (r[3] or "").strip(),
             "opisanie": (r[4] or "").strip(),
             "sposob": (r[5] or "").strip(),
+            "name": str(name),   # полное имя рецептуры — нужно для поиска единиц набора
         }
     return data
 
@@ -224,14 +259,26 @@ def main():
         art = cells[COL_ART].get("formattedValue", "") if len(cells) > COL_ART else ""
         if not art.strip():
             continue
-        key, code = code_for(art)
-        if not key:
-            continue
-        if code not in data:
-            problems.append(f"стр.{ridx+1} {key}: кода {code} нет в выгрузке 1С")
-            continue
+        comp_key = next((ck for ck in COMPOSITE if art.strip().startswith(ck)), None)
+        if comp_key:
+            # НАБОР: собрать 3 единицы (спрей/гель/паста для животных) через абзац
+            srcvals, found, missing = composite_fields(COMPOSITE[comp_key], data)
+            key = comp_key
+            if missing:
+                print(f"  [набор {comp_key}] единицы НЕ найдены в рецептурах: {missing}", flush=True)
+            if not found:
+                problems.append(f"стр.{ridx+1} {comp_key}: ни одной единицы набора нет в выгрузке 1С")
+                continue
+        else:
+            key, code = code_for(art)
+            if not key:
+                continue
+            if code not in data:
+                problems.append(f"стр.{ridx+1} {key}: кода {code} нет в выгрузке 1С")
+                continue
+            srcvals = {dk: data[code][dk] for _lbl, _col, dk in FIELDS}
         for label, col, dk in FIELDS:
-            new = data[code][dk]
+            new = srcvals.get(dk, "")
             cur = cells[col].get("formattedValue", "") if len(cells) > col else ""
             bg = cells[col].get("userEnteredFormat", {}).get("backgroundColor") if len(cells) > col else None
             if not new:
