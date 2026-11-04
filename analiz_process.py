@@ -530,6 +530,21 @@ def _gemini(prompt, maxt="8000", temp=0.2, t=90):
             continue
     raise last if last else RuntimeError("gemini: нет моделей")
 
+# ---------- Cloudflare Workers AI (Llama) — ещё один БЕСПЛАТНЫЙ движок в подхват (наш аккаунт) ----------
+CF_AI_TOKEN = os.environ.get("CF_AI_TOKEN", "")
+CF_AI_ACCOUNT = os.environ.get("CF_AI_ACCOUNT", "")
+CF_AI_MODEL = os.environ.get("CF_AI_MODEL", "@cf/meta/llama-3.1-70b-instruct")
+def _cloudflare(prompt, maxt="8000", temp=0.2, t=120):
+    body = json.dumps({"messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": int(maxt), "temperature": temp}).encode()
+    r = get(f"https://api.cloudflare.com/client/v4/accounts/{CF_AI_ACCOUNT}/ai/run/{CF_AI_MODEL}",
+            hdr={"Authorization": "Bearer " + CF_AI_TOKEN, "Content-Type": "application/json"}, data=body, t=t)
+    d = json.loads(r)
+    if not d.get("success"): raise RuntimeError("cf ai fail: " + str(d.get("errors"))[:150])
+    return (d.get("result") or {}).get("response", "")
+def cloudflare_analyze(data):
+    return claude_analyze(data, fetch=_cloudflare, attempts=3)
+
 def _ygpt_json(prompt, want="array", retries=6, maxt="8000", temp=0.2, call=None):
     call = call or _ygpt
     last = None
@@ -686,6 +701,7 @@ def run_analysis(data):
     # карточках и НИЧЕГО не отваливается: не влез Gemini в лимит — Яндекс добивает.
     chain = []
     if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
+    if CF_AI_TOKEN and CF_AI_ACCOUNT: chain.append(("Cloudflare", cloudflare_analyze))
     if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
     if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     errs = []
@@ -732,6 +748,7 @@ def claude_analyze(data, fetch=None, attempts=None):
 2. НИКОГДА не приписывай товару свойство/вкус/характеристику, которых у него нет. Вывод вроде «без вкуса, как указано в описании» для товара СО ВКУСОМ банана — грубая ложь, так писать ЗАПРЕЩЕНО. Сверяйся с названием и описанием товара выше.
 3. ПЕРЕД тем как выдать ответ — перечитай каждый пункт complaints/praise/gaps/ideal и проверь: он точно про ЭТОТ товар и НЕ противоречит его названию/вкусу/описанию? Если противоречит или сомнительно — убери пункт. Лучше меньше пунктов, но все верные.
 
+🔎 ОСОБО ВАЖНО ДЛЯ ЖАЛОБ — читай ВСЕ отзывы, включая 5★ и хвалебные: недостатки часто прячутся ВНУТРИ положительных отзывов как оговорки («классный, НО красит губы/раковину», «всё супер, жаль нет инструкции», «отлично, правда пачкает руки», «хорошо, но флакон маленький»). Такие оговорки — ЭТО ЖАЛОБЫ, выписывай их в "complaints", даже если отзыв в целом хвалебный и стоит 5★. НЕ пиши «жалоб нет», если в тексте (включая позитивные отзывы) встречаются повторяющиеся минусы/неудобства/претензии. Пропустить реальную жалобу, спрятанную в хорошем отзыве — грубая ошибка: именно эти «мелочи» показывают, что улучшить.
 В "complaints" и "praise" поле "desc" — качественное описание по сути (что именно пишут покупатели, какие слова используют, в каких ситуациях): по умолчанию 1-2 предложения с конкретикой; если тем ОЧЕНЬ много — сжимай до одного ёмкого предложения. БЕЗ воды, повторов и перечисления синонимов, НЕ фраза в 3 слова. БЕЗ чисел и слов вроде "несколько"/"много" (числа посчитает код отдельно, не придумывай их).
 ОБЪЕДИНЯЙ близкие по смыслу темы в ОДНУ (не дроби «коробка мятая» и «упаковка помялась» на две) — тем должно быть столько, сколько реально РАЗНЫХ, а не раздутый список почти-дублей.
 Для "ideal" — у каждого пункта укажи "scope": "recipe" (меняет состав/рецептуру/вкус/материал/текстуру товара) или "fix" (упаковка/инфографика/позиционирование/контроль качества/доп-SKU — без изменения продукта), и "based_on" — список тем жалоб (t), на которых основан пункт (пустой список для общей рекомендации). ВСЕГДА давай несколько "fix"-пунктов, даже если явных жалоб мало — по сильным сторонам/позиционированию/расширению тоже есть что сказать.
@@ -824,6 +841,43 @@ def claude_analyze(data, fetch=None, attempts=None):
             if attempt < ATTEMPTS - 1: time.sleep(20 if any(w in er for w in ("429", "503", "Unavailable", "overload")) else 8)
     else:
         raise RuntimeError(f"{eng}_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
+
+    # ДОП-ПРОХОД ПО НЕГАТИВУ (для бесплатных движков Gemini/Cloudflare — они слабее в ловле жалоб,
+    # спрятанных внутри 5★-отзывов; Claude ловит их в основном проходе). ОДИН доп. запрос.
+    if fetch is not None:
+        try:
+            allrev = (neg_s or []) + (pos_s or [])
+            if allrev:
+                dp = (f"Товар: «{data.get('name')}». Из отзывов ниже выпиши КАЖДЫЙ упомянутый НЕДОСТАТОК/"
+                      "минус/претензию/неудобство — ОБЯЗАТЕЛЬНО включая оговорки ВНУТРИ хвалебных 5★-отзывов "
+                      "(«классный, НО красит губы», «всё супер, жаль нет инструкции», «отлично, правда пачкает руки», "
+                      "«хорошо, но флакон маленький»). Эти оговорки — ЭТО ЖАЛОБЫ. Анализируй ТОЛЬКО этот товар "
+                      "(отзывы явно про другой вариант/вкус игнорируй). "
+                      'Верни СТРОГО JSON-массив: [{"t":"тема минуса коротко","desc":"суть одним предложением, без чисел"}]. '
+                      "Если во ВСЕХ отзывах реально ни одного минуса нет — верни []. "
+                      f"ОТЗЫВЫ: {json.dumps(allrev, ensure_ascii=False)}")
+                dtxt = fetch(dp, maxt="4000", temp=0.2, t=120)
+                dtxt = re.sub(r"^```json|```$", "", dtxt.strip(), flags=re.M).strip()
+                dm = re.search(r"\[.*\]", dtxt, re.S)
+                extra = json.loads(dm.group(0)) if dm else []
+                if isinstance(extra, list) and extra:
+                    # убираем заглушки «жалоб нет» из основного прохода и домешиваем найденные минусы
+                    def _ph(t): return bool(re.search(r"не выявл|жалоб нет|нет жалоб|нет явных|отсутств|не обнаруж", (t or "").lower()))
+                    have = [c for c in (raw.get("complaints") or []) if isinstance(c, dict) and c.get("t") and not _ph(c["t"])]
+                    seen = set()
+                    for c in have:
+                        k = frozenset(_stems(c["t"]))
+                        if k: seen.add(k)
+                    for c in extra:
+                        if not isinstance(c, dict) or not c.get("t"): continue
+                        k = frozenset(_stems(c["t"]))
+                        if k and k in seen: continue
+                        if k: seen.add(k)
+                        have.append({"t": c.get("t"), "desc": c.get("desc") or ""})
+                    raw["complaints"] = have
+        except Exception as _e:
+            print("доп-проход по негативу пропущен:", repr(_e)[:120])
+
     # Значимость темы (10+ за месяц) считаем ТОЛЬКО кодом. Полный текст жалоб/похвал (вся история)
     # идёт на подсчёт реального числа для КАЖДОЙ темы — она всегда попадает в вывод явным числом.
     result = _enforce_scale(raw, total, neg_month, neg, pos)
@@ -854,9 +908,13 @@ def _enforce_scale(raw, total, neg_month_texts, neg_all_texts, pos_texts=None):
     complaints = raw.get("complaints") or []
     sig = {}; levels = {}; counts_all = {}; counts_month = {}
     kept_complaints = []
+    # Жалобы-оговорки часто внутри 5★-отзывов (напр. «красит губы», «нет инструкции») — поэтому
+    # ОБЩЕЕ число упоминаний темы считаем по ВСЕМ отзывам (негатив + позитив), иначе такой минус
+    # получал 0 и выбрасывался. Месячный счёт (для recipe-гейта) оставляем по негативу.
+    all_texts_for_count = (neg_all_texts or []) + (pos_texts or [])
     for c in complaints:
         t = c.get("t") or ""
-        c_all = _real_count(t, neg_all_texts)
+        c_all = _real_count(t, all_texts_for_count)
         c_month = _real_count(t, neg_month_texts)
         counts_all[t] = c_all; counts_month[t] = c_month
         lvl = _scale_level(c_month)
