@@ -79,6 +79,16 @@ def _get(url):
                 wait = min(60, 12 * (attempt + 1))
                 print(f"  429 на GET, жду {wait}с (попытка {attempt+1}/5)")
                 time.sleep(wait); continue
+            if e.code in (500, 502, 503, 504) and attempt < 3:   # временный сбой сервера маркетплейса, НЕ смена API
+                wait = 10 * (attempt + 1)
+                print(f"  {e.code} (сервис временно недоступен) на GET, жду {wait}с (попытка {attempt+1}/3)")
+                time.sleep(wait); continue
+            raise
+        except (urllib.error.URLError, TimeoutError) as e:        # сеть/таймаут — тоже транзиент
+            if attempt < 3:
+                wait = 10 * (attempt + 1)
+                print(f"  сеть/таймаут на GET ({e}), жду {wait}с (попытка {attempt+1}/3)")
+                time.sleep(wait); continue
             raise
 
 
@@ -95,6 +105,16 @@ def _post(url, body, headers=None):
             if e.code == 429 and attempt < 5:
                 wait = min(60, 12 * (attempt + 1))
                 print(f"  429 на POST, жду {wait}с (попытка {attempt+1}/5)")
+                time.sleep(wait); continue
+            if e.code in (500, 502, 503, 504) and attempt < 3:   # временный сбой сервера маркетплейса, НЕ смена API
+                wait = 10 * (attempt + 1)
+                print(f"  {e.code} (сервис временно недоступен) на POST, жду {wait}с (попытка {attempt+1}/3)")
+                time.sleep(wait); continue
+            raise
+        except (urllib.error.URLError, TimeoutError) as e:        # сеть/таймаут — тоже транзиент
+            if attempt < 3:
+                wait = 10 * (attempt + 1)
+                print(f"  сеть/таймаут на POST ({e}), жду {wait}с (попытка {attempt+1}/3)")
                 time.sleep(wait); continue
             raise
 
@@ -698,7 +718,13 @@ def _alert_fail(err):
         t = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(); c = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
         if not t or not c:
             return
-        msg = f"<b>FBS-монитор упал</b>\n{str(err)[:300]}\nВозможно Ozon/WB снова сменили API — нужна проверка."
+        _trans = (isinstance(err, urllib.error.HTTPError) and err.code in (500, 502, 503, 504)) or \
+                 (isinstance(err, (urllib.error.URLError, TimeoutError, ConnectionError)) and not isinstance(err, urllib.error.HTTPError))
+        if _trans:
+            msg = (f"<b>FBS-монитор: маркетплейс временно недоступен</b>\n{str(err)[:300]}\n"
+                   f"Это временный сбой на стороне Ozon/WB (НЕ смена API). Следующий прогон соберёт сам — проверка не нужна.")
+        else:
+            msg = f"<b>FBS-монитор упал</b>\n{str(err)[:300]}\nВозможно Ozon/WB снова сменили API — нужна проверка."
         body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML", "disable_notification": ("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
         urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage", data=body), context=CTX, timeout=25).read()
     except Exception:
