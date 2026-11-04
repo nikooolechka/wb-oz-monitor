@@ -533,6 +533,12 @@ def _gemini(prompt, maxt="8000", temp=0.2, t=90):
 # ---------- Cloudflare Workers AI (Llama) — ещё один БЕСПЛАТНЫЙ движок в подхват (наш аккаунт) ----------
 CF_AI_TOKEN = os.environ.get("CF_AI_TOKEN", "")
 CF_AI_ACCOUNT = os.environ.get("CF_AI_ACCOUNT", "")
+# Dify-GPT: стабильный GPT через наш self-hosted Dify (app-passthrough /v1/workflows/run, РФ-сервер).
+# Движок №1 в цепочке, если настроен (DIFY_URL=http://IP/v1, DIFY_KEY=app-ключ). Если не настроен —
+# всё как раньше. DIFY_REVIEW_CAP — сколько отзывов-тем уходит в промпт (числа всё равно по ВСЕМ, _enforce_scale).
+DIFY_URL = os.environ.get("DIFY_URL", "").rstrip("/")
+DIFY_KEY = os.environ.get("DIFY_KEY", "")
+DIFY_REVIEW_CAP = int(os.environ.get("DIFY_REVIEW_CAP", "1000") or "1000")
 CF_AI_MODEL = os.environ.get("CF_AI_MODEL", "@cf/meta/llama-3.1-70b-instruct")
 def _cloudflare(prompt, maxt="8000", temp=0.2, t=120):
     body = json.dumps({"messages": [{"role": "user", "content": prompt}],
@@ -692,6 +698,25 @@ def gemini_analyze(data):
     # быстро сдаётся (не крутит 6 раз), и подхват YandexGPT случается без долгого простоя.
     return claude_analyze(data, fetch=_gemini, attempts=3)
 
+def _dify_gpt(prompt, maxt="16000", temp=0.2, t=240):
+    """GPT через наш self-hosted Dify (app-passthrough: промпт -> GPT -> текст). headless, РФ-сервер.
+    Сигнатура как у _gemini (prompt,maxt,temp,t), чтобы работать через общий claude_analyze(fetch=...)."""
+    body = json.dumps({"inputs": {"prompt": prompt}, "response_mode": "blocking", "user": "asfarm-analiz"}).encode()
+    r = get(DIFY_URL + "/workflows/run",
+            hdr={"Authorization": "Bearer " + DIFY_KEY, "Content-Type": "application/json"},
+            data=body, t=240)
+    d = json.loads(r)
+    st = (d.get("data") or {}).get("status")
+    if st != "succeeded":
+        raise RuntimeError("dify status=" + str(st) + " " + str((d.get("data") or {}).get("error") or "")[:150])
+    return ((d.get("data") or {}).get("outputs") or {}).get("text") or ""
+
+def dify_analyze(data):
+    # тот же единый промпт, что у Claude/Gemini (claude_analyze), но движок = GPT в Dify,
+    # и выборка отзывов поднята до DIFY_REVIEW_CAP (вместо 400). Структура ответа идентична,
+    # поэтому вся обвязка (MPStats/Wordstat/дашборд) работает без изменений.
+    return claude_analyze(data, fetch=_dify_gpt, attempts=4, rev_cap=DIFY_REVIEW_CAP)
+
 def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
     YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
@@ -701,6 +726,7 @@ def run_analysis(data):
     # основным) -> Gemini (беспл.) -> Cloudflare (беспл.) -> YandexGPT (платный бэкстоп, ~3-8₽, гарантия
     # что анализ пройдёт). Так дёшево на лёгких и НИЧЕГО не отваливается.
     chain = []
+    if DIFY_KEY and DIFY_URL: chain.append(("Dify-GPT", dify_analyze))   # №1 если настроен (стабильный GPT, РФ)
     if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
     if CF_AI_TOKEN and CF_AI_ACCOUNT: chain.append(("Cloudflare", cloudflare_analyze))
@@ -720,7 +746,7 @@ def run_analysis(data):
     raise RuntimeError("все движки ИИ недоступны -> " + " | ".join(errs))
 
 
-def claude_analyze(data, fetch=None, attempts=None):
+def claude_analyze(data, fetch=None, attempts=None, rev_cap=400):
     # fetch=None -> движок Claude (Anthropic). fetch=функция(prompt,maxt,temp,t)->текст -> любой
     # ДРУГОЙ сильный движок (Gemini) тем же ЕДИНЫМ промптом (1 запрос, а не мультипроход на 6).
     # attempts: сколько попыток до сдачи (у Gemini меньше -> быстро уступает Яндексу на тяжёлых).
@@ -739,9 +765,20 @@ def claude_analyze(data, fetch=None, attempts=None):
     # В ПРОМПТ ИИ уходит крупная выборка (чтобы запрос на 1000+ отзывов не раздулся), а ЧИСЛА
     # (сколько жалоб/похвал по теме) код считает ниже по ВСЕМ отзывам (_enforce_scale) — поэтому
     # выборка не занижает цифры (владелец, 23.10.2026: «1000 отзывов — все обрабатывать»).
-    PROMPT_CAP = 400
-    pos_s = pos[:PROMPT_CAP]
-    neg_s = neg[:PROMPT_CAP]
+    PROMPT_CAP = rev_cap
+    # выборка тем в промпт поднята до rev_cap (GPT тянет больше), + страховка от раздувания:
+    # обрезаем очень длинные тексты и общий объём, чтобы не вылезти за контекст модели. Числа жалоб
+    # всё равно считаются по ВСЕМ отзывам ниже (_enforce_scale), выборка влияет лишь на полноту ТЕМ.
+    pos_s = [x[:500] for x in pos[:PROMPT_CAP]]
+    neg_s = [x[:600] for x in neg[:PROMPT_CAP]]
+    def _budget(lst, cap):
+        out = []; tot = 0
+        for x in lst:
+            tot += len(x) + 2
+            if tot > cap: break
+            out.append(x)
+        return out
+    neg_s = _budget(neg_s, 240000); pos_s = _budget(pos_s, 120000)
     prompt = f"""Ты маркетинговый аналитик маркетплейсов. Разбери карточку конкурента ТОЛЬКО по фактам ниже. Без воды, без «возможно». Будь ИСЧЕРПЫВАЮЩИМ: охвати ВСЕ реально разные темы жалоб (а не только 1-2 главные) и дай МИНИМУМ 5-7 пунктов в "ideal" (упаковка, инфографика, позиционирование, контроль качества, доп-SKU и т.д.). По умолчанию формулируй подробно и по сути. НО если тем получается ОЧЕНЬ много — сжимай каждую до одного ёмкого предложения, чтобы разбор оставался читаемым, НЕ теряя ни одной темы (лучше много коротких точных пунктов, чем простыня).
 
 🚫 ЖЕЛЕЗНОЕ ПРАВИЛО ТОЧНОСТИ (ошибка тут бьёт по прибыли компании, недопустима):
