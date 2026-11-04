@@ -28,4 +28,6 @@ jobs:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
+          CF_AI_TOKEN: ${{ secrets.CF_AI_TOKEN }}
+          CF_AI_ACCOUNT: ${{ secrets.CF_AI_ACCOUNT }}
         run: python analiz_process.py
