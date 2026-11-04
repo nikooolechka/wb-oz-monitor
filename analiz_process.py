@@ -673,18 +673,20 @@ def ygpt_analyze(data, call=None):
 def gemini_analyze(data):
     # Gemini — СИЛЬНАЯ модель: весь разбор ОДНИМ цельным запросом (единый промпт Claude), а НЕ
     # мультипроходом ygpt (тот слал 6 тяжёлых запросов и валил бесплатный лимит токенов/мин -> 429).
-    # _gemini внутри сам перебирает модели на 429/503.
-    return claude_analyze(data, fetch=_gemini)
+    # _gemini внутри сам перебирает модели на 429/503. attempts=3 — на тяжёлых карточках Gemini
+    # быстро сдаётся (не крутит 6 раз), и подхват YandexGPT случается без долгого простоя.
+    return claude_analyze(data, fetch=_gemini, attempts=3)
 
 def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
     YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
     с перечислением причин (их увидит владелец в личке). Гнилой/пустой результат НЕ принимаем."""
-    # Порядок: YandexGPT ОСНОВНОЙ (платный, под облаком владельца, без лимитов — тянет любые карточки,
-    # в т.ч. гиганты на 1000+ отзывов) -> Gemini (бесплатный запасной, на лёгких) -> Claude.
+    # Порядок (владелец 2026-11-04): Gemini ОСНОВНОЙ (БЕСПЛАТНЫЙ — экономим) -> YandexGPT ВСЕГДА
+    # на подхвате (платный, надёжный, тянет что Gemini не осилил) -> Claude. Так дёшево на лёгких
+    # карточках и НИЧЕГО не отваливается: не влез Gemini в лимит — Яндекс добивает.
     chain = []
-    if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
     if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
+    if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
     if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     errs = []
     for nm, fn in chain:
@@ -701,9 +703,10 @@ def run_analysis(data):
     raise RuntimeError("все движки ИИ недоступны -> " + " | ".join(errs))
 
 
-def claude_analyze(data, fetch=None):
+def claude_analyze(data, fetch=None, attempts=None):
     # fetch=None -> движок Claude (Anthropic). fetch=функция(prompt,maxt,temp,t)->текст -> любой
     # ДРУГОЙ сильный движок (Gemini) тем же ЕДИНЫМ промптом (1 запрос, а не мультипроход на 6).
+    # attempts: сколько попыток до сдачи (у Gemini меньше -> быстро уступает Яндексу на тяжёлых).
     # Вопросы покупателей к товару (если собраны) — тексты вопросов (+ ответ продавца, если есть).
     questions = data.get("questions") or []
     q_s = [{"q": (x.get("t") or "")[:300], "ans": bool(x.get("a"))} for x in questions[:40] if x.get("t")]
@@ -785,7 +788,7 @@ def claude_analyze(data, fetch=None):
     # stop_reason=="max_tokens" (100% надёжный признак обрезки, не гадание по тексту ошибки) и, если он
     # есть, САМИ удваиваем лимит на следующей попытке — лимит подстраивается под любой товар автоматически.
     last_err = None
-    ATTEMPTS = 6
+    ATTEMPTS = attempts if attempts else 6
     cur_max_tokens = 12000
     eng = "gemini" if fetch is not None else "claude"
     for attempt in range(ATTEMPTS):
