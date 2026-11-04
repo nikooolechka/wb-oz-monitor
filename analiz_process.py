@@ -419,25 +419,30 @@ def _dstems(text):
     """Стемы для СКЛЕЙКИ тем — первые 4 символа (ловит разные формы: 'слабая'/'слабый' → 'слаб')."""
     return {w[:4] for w in re.findall(r"[а-яёa-z]{4,}", (text or "").lower())}
 
+# Общие слова-модификаторы и мусор, по которым НЕЛЬЗЯ склеивать темы (иначе разные темы слипнутся).
+_DEDUP_STOP = {"това","прод","сред","жидк","вода","очен","слиш","немн","дово","прос","силь","сам","этот","како","боль","мал","эффе","резу","каче","проб"}
+
 def _dedup_complaints(complaints):
-    """Склейка жалоб: темы с сильно пересекающимися словами → ОДНА (а не 'вкус' + 'неприятный вкус' +
-    'послевкусие' тремя темами). Берём самый описательный заголовок, копим desc. Работает для ЛЮБОЙ
-    модели — не надеемся только на промпт. Порог склейки = 60% пересечения по меньшему набору слов."""
+    """Склейка жалоб: темы, делящие ХОТЯ БЫ ОДНО содержательное слово (не общий модификатор), →
+    в ОДНУ ('неприятный вкус' + 'резкий вкус' + 'послевкусие' = одна тема «вкус»; 'нет свежести' +
+    'отсутствие свежести' = одна). Берём самый описательный заголовок, копим desc. Для ЛЮБОЙ модели,
+    не надеясь только на промпт. Склейка транзитивна (A↔B, B↔C → все вместе)."""
+    def _content(t):
+        s = {w for w in _dstems(t) if w not in _DEDUP_STOP}
+        return s or _dstems(t)
     merged = []
     for c in complaints:
         t = (c.get("t") or "").strip()
         if not t: continue
         d = (c.get("desc") or c.get("n") or "").strip()
-        st = _dstems(t)
-        best = None; best_ov = 0.0
+        st = _content(t)
+        tgt = None
         for m in merged:
-            if not (st and m["st"]): continue
-            ov = len(st & m["st"]) / (min(len(st), len(m["st"])) or 1)
-            if ov > best_ov: best_ov = ov; best = m
-        if best is not None and best_ov >= 0.6:
-            if len(t) > len(best["t"]): best["t"] = t
-            if d and d[:40] not in best["desc"]: best["desc"] = (best["desc"] + " " + d).strip()
-            best["st"] |= st
+            if st & m["st"]: tgt = m; break
+        if tgt is not None:
+            if len(t) > len(tgt["t"]): tgt["t"] = t
+            if d and d[:40] not in tgt["desc"]: tgt["desc"] = (tgt["desc"] + " " + d).strip()
+            tgt["st"] |= st
         else:
             merged.append({"t": t, "desc": d, "st": st})
     return [{"t": m["t"], "desc": m["desc"]} for m in merged]
