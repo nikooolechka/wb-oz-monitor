@@ -412,6 +412,36 @@ def _real_count(theme_title, neg_texts):
     if not stems: return 0
     return sum(1 for t in neg_texts if _stems(t) & stems)
 
+# оговорка-минус внутри хвалебного отзыва («классный, НО красит», «всё супер, жаль нет инструкции»)
+_NEG_CUE = re.compile(r"(^|[\s,.:;!?(])(но|однако|жаль|минус|увы|хотя|плох|разочаров|подвёл|подвел|слишком|к сожалению|не |нет )", re.I)
+
+def _dstems(text):
+    """Стемы для СКЛЕЙКИ тем — первые 4 символа (ловит разные формы: 'слабая'/'слабый' → 'слаб')."""
+    return {w[:4] for w in re.findall(r"[а-яёa-z]{4,}", (text or "").lower())}
+
+def _dedup_complaints(complaints):
+    """Склейка жалоб: темы с сильно пересекающимися словами → ОДНА (а не 'вкус' + 'неприятный вкус' +
+    'послевкусие' тремя темами). Берём самый описательный заголовок, копим desc. Работает для ЛЮБОЙ
+    модели — не надеемся только на промпт. Порог склейки = 60% пересечения по меньшему набору слов."""
+    merged = []
+    for c in complaints:
+        t = (c.get("t") or "").strip()
+        if not t: continue
+        d = (c.get("desc") or c.get("n") or "").strip()
+        st = _dstems(t)
+        best = None; best_ov = 0.0
+        for m in merged:
+            if not (st and m["st"]): continue
+            ov = len(st & m["st"]) / (min(len(st), len(m["st"])) or 1)
+            if ov > best_ov: best_ov = ov; best = m
+        if best is not None and best_ov >= 0.6:
+            if len(t) > len(best["t"]): best["t"] = t
+            if d and d[:40] not in best["desc"]: best["desc"] = (best["desc"] + " " + d).strip()
+            best["st"] |= st
+        else:
+            merged.append({"t": t, "desc": d, "st": st})
+    return [{"t": m["t"], "desc": m["desc"]} for m in merged]
+
 def _recent_reviews(revs, days=30):
     """Отзывы за последние N дней (по полю даты, разные платформы кладут её по-разному)."""
     import datetime
@@ -965,13 +995,16 @@ def _enforce_scale(raw, total, neg_month_texts, neg_all_texts, pos_texts=None):
     - темы с 4-9 жалобами за месяц получают программно собранную пометку «на заметку» с точным числом;
     - темы <4 за месяц — слишком мало, из рекомендаций исключаем (но из complaints не убираем,
       если по ВСЕЙ истории накопилось заметное число — информативность важнее)."""
-    complaints = raw.get("complaints") or []
+    complaints = _dedup_complaints(raw.get("complaints") or [])   # склейка дублей тем жалоб
     sig = {}; levels = {}; counts_all = {}; counts_month = {}
     kept_complaints = []
     # Жалобы-оговорки часто внутри 5★-отзывов (напр. «красит губы», «нет инструкции») — поэтому
     # ОБЩЕЕ число упоминаний темы считаем по ВСЕМ отзывам (негатив + позитив), иначе такой минус
     # получал 0 и выбрасывался. Месячный счёт (для recipe-гейта) оставляем по негативу.
-    all_texts_for_count = (neg_all_texts or []) + (pos_texts or [])
+    # считаем тему по НЕГАТИВУ + только тем позитивным отзывам, где есть оговорка-минус («…, но …»),
+    # чтобы чистая похвала аспекта (напр. «вкусный») НЕ раздувала число жалоб по этому аспекту.
+    _pos_cue = [t for t in (pos_texts or []) if _NEG_CUE.search(t or "")]
+    all_texts_for_count = (neg_all_texts or []) + _pos_cue
     for c in complaints:
         t = c.get("t") or ""
         c_all = _real_count(t, all_texts_for_count)
