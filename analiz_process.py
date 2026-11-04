@@ -1191,9 +1191,21 @@ def card_png(d, path):
     by=py+PS+44
     dr.line([(PAD,by),(W-PAD,by)],fill=(40,54,72),width=2); by+=24
     dr.text((PAD,by),"КТО ПОКУПАЕТ",font=_font(700,21),fill=(46,230,200)); by+=32
-    for ln in wrap(d.get("ca",""),_font(400,26),W-2*PAD)[:2]:
+    # Блок «кто покупает» — ровно 2 строки высотой (макет не меняем). Если текст длинный и не влезает
+    # в 2 строки при шрифте 26 — УМЕНЬШАЕМ шрифт (до 17), чтобы влез ВЕСЬ, а не обрезался на полуслове.
+    _ca = d.get("ca","") or ""
+    _csz = 26
+    while _csz > 17 and len(wrap(_ca, _font(400,_csz), W-2*PAD)) > 2: _csz -= 1
+    _lines = wrap(_ca, _font(400,_csz), W-2*PAD)
+    if len(_lines) > 2:
+        # даже на мин. размере не влезает в 2 строки — обрезаем ПО СЛОВУ с «…», не на полуслове
+        _l2 = _lines[1]
+        while _l2 and dr.textlength(_l2+"…", font=_font(400,_csz)) > W-2*PAD:
+            _l2 = _l2.rsplit(" ",1)[0] if " " in _l2 else _l2[:-1]
+        _lines = [_lines[0], (_l2+"…") if _l2 else _lines[1]]
+    for ln in _lines[:2]:
         if by+30>content_limit: break
-        dr.text((PAD,by),ln,font=_font(400,26),fill=(206,220,230)); by+=34
+        dr.text((PAD,by),ln,font=_font(400,_csz),fill=(206,220,230)); by+=34
     by+=12
     if by+30<=content_limit:
         dr.text((PAD,by),"ЧЕМ ЦЕПЛЯЕТ ПОКУПАТЕЛЯ",font=_font(700,21),fill=(46,230,200)); by+=36
