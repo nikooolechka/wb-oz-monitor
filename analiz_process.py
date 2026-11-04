@@ -356,6 +356,9 @@ def mpstats_via_pc(platform, sku, url, name, nterms, timeout=300):
     import uuid
     nonce = "m" + uuid.uuid4().hex[:12]
     tok = os.environ.get("MPSTATS_TOKEN", "")
+    if not tok:
+        print("mpstats_via_pc: НЕТ MPSTATS_TOKEN в окружении — не шлю команду (иначе пустой аргумент сдвинет args)")
+        return None
     nb = base64.b64encode((name or "").encode("utf-8")).decode() if name else "-"
     ntb = base64.b64encode(json.dumps(nterms or {}, ensure_ascii=False).encode("utf-8")).decode() if nterms else "-"
     cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
