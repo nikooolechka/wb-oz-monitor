@@ -939,14 +939,6 @@ def claude_analyze(data, fetch=None, attempts=None, rev_cap=400):
     else:
         raise RuntimeError(f"{eng}_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
 
-    # Смысловой merge-проход: та же модель группирует одинаковые по смыслу темы жалоб (общее для ЛЮБОЙ
-    # ниши, без словарей). Только для внешних движков с fetch (Dify-GPT/Gemini). Сбой не ломает разбор.
-    if fetch is not None and raw.get("complaints"):
-        try:
-            raw["complaints"] = _semantic_merge(raw["complaints"], lambda p: fetch(p, maxt="2000", temp=0, t=90))
-        except Exception as _e:
-            print("semantic merge skip:", repr(_e)[:120])
-
     # ДОП-ПРОХОД ПО НЕГАТИВУ (для бесплатных движков Gemini/Cloudflare — они слабее в ловле жалоб,
     # спрятанных внутри 5★-отзывов; Claude ловит их в основном проходе). ДВА запроса:
     # проход 1 — вытащить минусы; проход 2 (критик) — «что ещё пропущено?». Как перечитывание человеком.
@@ -998,6 +990,14 @@ def claude_analyze(data, fetch=None, attempts=None, rev_cap=400):
                     raw["complaints"] = have
         except Exception as _e:
             print("доп-проход по негативу пропущен:", repr(_e)[:120])
+
+    # Смысловой merge-проход (ПОСЛЕ доп-прохода, на ФИНАЛЬНОМ списке жалоб): та же модель группирует
+    # одинаковые по смыслу темы в одну — общее для ЛЮБОЙ ниши, без словарей. Сбой не ломает разбор.
+    if fetch is not None and raw.get("complaints"):
+        try:
+            raw["complaints"] = _semantic_merge(raw["complaints"], lambda p: fetch(p, maxt="2000", temp=0, t=90))
+        except Exception as _e:
+            print("semantic merge skip:", repr(_e)[:120])
 
     # Значимость темы (10+ за месяц) считаем ТОЛЬКО кодом. Полный текст жалоб/похвал (вся история)
     # идёт на подсчёт реального числа для КАЖДОЙ темы — она всегда попадает в вывод явным числом.
