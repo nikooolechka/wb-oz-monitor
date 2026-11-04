@@ -696,14 +696,15 @@ def run_analysis(data):
     """Пробуем движки по очереди, пока хоть один не отдаст валидный разбор:
     YandexGPT -> Gemini -> Claude. Возвращает (результат, имя_движка). Если ВСЕ упали — raise
     с перечислением причин (их увидит владелец в личке). Гнилой/пустой результат НЕ принимаем."""
-    # Порядок (владелец 2026-11-04): Gemini ОСНОВНОЙ (БЕСПЛАТНЫЙ — экономим) -> YandexGPT ВСЕГДА
-    # на подхвате (платный, надёжный, тянет что Gemini не осилил) -> Claude. Так дёшево на лёгких
-    # карточках и НИЧЕГО не отваливается: не влез Gemini в лимит — Яндекс добивает.
+    # Порядок (владелец 2026-11-04): Claude ПЕРВЫМ (он эталон качества; пока заблокирован верификацией —
+    # мгновенно сдаётся на 403 за долю секунды и уходит дальше; КАК ТОЛЬКО разблокируется — авто-станет
+    # основным) -> Gemini (беспл.) -> Cloudflare (беспл.) -> YandexGPT (платный бэкстоп, ~3-8₽, гарантия
+    # что анализ пройдёт). Так дёшево на лёгких и НИЧЕГО не отваливается.
     chain = []
+    if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     if GEMINI_KEY: chain.append(("Gemini", gemini_analyze))
     if CF_AI_TOKEN and CF_AI_ACCOUNT: chain.append(("Cloudflare", cloudflare_analyze))
     if YGPT_KEY: chain.append(("YandexGPT", lambda d: ygpt_analyze(d, call=_ygpt)))
-    if ANTHROPIC_KEY: chain.append(("Claude", claude_analyze))
     errs = []
     for nm, fn in chain:
         try:
@@ -831,8 +832,13 @@ def claude_analyze(data, fetch=None, attempts=None):
             break
         except Exception as e:
             last_err = e; er = repr(e)
-            # 403/401 у внешнего движка — это доступ, повтор не поможет, сразу наружу (к след. движку цепочки)
-            if fetch is not None and any(w in er for w in ("403", "401", "PermissionDenied", "Forbidden")): break
+            # 403/401/верификация — это доступ/блокировка, повтор НЕ поможет: сразу наружу (к след. движку).
+            # Для Claude (fetch=None) это критично: пока Anthropic заблокирован верификацией (403), он
+            # МГНОВЕННО сдаётся (1 попытка, без минуты повторов) и цепочка идёт на Gemini. А как только
+            # верификация пройдёт — Claude отработает нормально и станет основным (он стоит первым).
+            # raise (не break!): пробрасываем ошибку в run_analysis -> тот берёт следующий движок.
+            # (break тут вёл к падению: после него код лез к несобранному raw.)
+            if any(w in er for w in ("403", "401", "PermissionDenied", "Forbidden", "verification")): raise
             # нет/обрезан JSON — на след. попытке даём больше токенов
             if any(w in er for w in ("no json", "Expecting value", "Extra data", "Unterminated")):
                 cur_max_tokens = min(cur_max_tokens * 2, 32000)
