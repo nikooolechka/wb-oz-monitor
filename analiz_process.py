@@ -430,6 +430,41 @@ def _dedup_complaints(complaints):
         out.append({"t": t, "desc": (c.get("desc") or c.get("n") or "")})
     return out
 
+def _semantic_merge(complaints, call):
+    """Смысловая склейка тем жалоб САМОЙ моделью — для ЛЮБОЙ ниши, без зашитых слов. Одинаковые по
+    смыслу формулировки одной проблемы → одна тема. call(prompt)->text. При любой ошибке/сомнении
+    возвращаем как есть (лучше НЕ слить, чем ошибочно объединить разные жалобы). Темы не теряем."""
+    items = [c for c in complaints if (c.get("t") or "").strip()]
+    if len(items) < 3: return complaints
+    titles = [c["t"].strip() for c in items]
+    prompt = ("Ниже пронумерованный список тем жалоб покупателей на ОДИН товар. Объедини в группы ТОЛЬКО те, "
+              "что об ОДНОЙ И ТОЙ ЖЕ проблеме, просто названы по-разному (напр. «резкий вкус» / «неприятный вкус» / "
+              "«горечь» — одна группа; «нет свежести» / «отсутствие свежести» — одна). РАЗНЫЕ проблемы НЕ объединяй "
+              "(напр. «слабый эффект» и «нет отбеливания» — РАЗНОЕ). Верни СТРОГО JSON-массив групп без markdown: "
+              "[{\"t\":\"лучшая короткая формулировка группы\",\"ids\":[номера входящих тем]}]. Каждая тема — РОВНО в "
+              "одной группе; одиночная тема = группа из одной.\n\nТЕМЫ:\n" + "\n".join(f"{i+1}. {t}" for i, t in enumerate(titles)))
+    txt = call(prompt) or ""
+    txt = re.sub(r"^```json|```$", "", txt.strip(), flags=re.M).strip()
+    mm = re.search(r"\[.*\]", txt, re.S)
+    if not mm: return complaints
+    groups = json.loads(mm.group(0))
+    if not isinstance(groups, list): return complaints
+    used = set(); out = []
+    for g in groups:
+        ids = [int(x) - 1 for x in (g.get("ids") or []) if str(x).strip().lstrip("-").isdigit()]
+        ids = [i for i in ids if 0 <= i < len(items) and i not in used]
+        if not ids: continue
+        for i in ids: used.add(i)
+        base_t = (g.get("t") or "").strip() or items[ids[0]]["t"]
+        descs = []
+        for i in ids:
+            d = (items[i].get("desc") or items[i].get("n") or "").strip()
+            if d and d[:40] not in " ".join(descs): descs.append(d)
+        out.append({"t": base_t, "desc": " ".join(descs)[:600]})
+    for i, c in enumerate(items):          # темы, которые модель не вернула — не теряем
+        if i not in used: out.append({"t": c["t"], "desc": (c.get("desc") or c.get("n") or "")})
+    return out if out else complaints
+
 def _recent_reviews(revs, days=30):
     """Отзывы за последние N дней (по полю даты, разные платформы кладут её по-разному)."""
     import datetime
@@ -903,6 +938,14 @@ def claude_analyze(data, fetch=None, attempts=None, rev_cap=400):
             if attempt < ATTEMPTS - 1: time.sleep(20 if any(w in er for w in ("429", "503", "Unavailable", "overload")) else 8)
     else:
         raise RuntimeError(f"{eng}_analyze: все {ATTEMPTS} попыток провалились: {repr(last_err)[:200]}")
+
+    # Смысловой merge-проход: та же модель группирует одинаковые по смыслу темы жалоб (общее для ЛЮБОЙ
+    # ниши, без словарей). Только для внешних движков с fetch (Dify-GPT/Gemini). Сбой не ломает разбор.
+    if fetch is not None and raw.get("complaints"):
+        try:
+            raw["complaints"] = _semantic_merge(raw["complaints"], lambda p: fetch(p, maxt="2000", temp=0, t=90))
+        except Exception as _e:
+            print("semantic merge skip:", repr(_e)[:120])
 
     # ДОП-ПРОХОД ПО НЕГАТИВУ (для бесплатных движков Gemini/Cloudflare — они слабее в ловле жалоб,
     # спрятанных внутри 5★-отзывов; Claude ловит их в основном проходе). ДВА запроса:
