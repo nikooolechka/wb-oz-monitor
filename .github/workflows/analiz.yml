@@ -30,4 +30,7 @@ jobs:
           MPSTATS_TOKEN: ${{ secrets.MPSTATS_TOKEN }}
           CF_AI_TOKEN: ${{ secrets.CF_AI_TOKEN }}
           CF_AI_ACCOUNT: ${{ secrets.CF_AI_ACCOUNT }}
+          DIFY_URL: ${{ secrets.DIFY_URL }}
+          DIFY_KEY: ${{ secrets.DIFY_KEY }}
+          DIFY_REVIEW_CAP: "1000"
         run: python analiz_process.py
