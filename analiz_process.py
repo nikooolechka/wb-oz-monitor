@@ -10,7 +10,7 @@ from collections import Counter
 
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 PULT = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"
-QUEUE_CELL = "Лист1!M1"; BUSY_CELL = "Лист1!M2"
+QUEUE_CELL = "Лист1!M1"; BUSY_CELL = "Лист1!M2"; MAINT_CELL = "Лист1!M4"  # M4 начинается с "1" = тех-работы
 PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3"; PRICE_HB = "Лист1!A4"
 BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
@@ -1452,6 +1452,8 @@ def process_one():
     # Приёмник дописывает ссылки в конец по порядку прихода (от любого человека), обрабатываем
     # строго по этому порядку. Результат уходит ТОЛЬКО тому, кто запросил — chat зашит в строке
     # очереди, карточка/сообщение шлётся именно в этот chat (владелец, 23.10.2026).
+    if (sread(MAINT_CELL) or "").strip().startswith("1"):
+        return "maint"   # тех-работы (M4): ничего не обрабатываем, ссылки ждут в очереди
     q=sread(QUEUE_CELL)
     lines=[x for x in q.split("\n") if x.strip()]
     if not lines: return "empty"
@@ -1488,30 +1490,27 @@ def process_one():
                 print(f"сбор неполный (фото_ok={_photo_ok(data.get('photo'))}, stars_ok={_stars_ok}) — повтор {_att+2}/4")
                 time.sleep(20)
         if data and data.get("_pc_down"):
-            tg_msg(chat,"Удалённый ПК сейчас недоступен (нужен для сбора с Ozon) — попробуй прислать ссылку чуть позже.")
+            tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: ПК недоступен (нужен для Ozon), не собрал\n{url}")
             data=None
         elif data and data.get("_wrong_variant"):
-            tg_msg(chat,"👻УПС - Ozon сейчас открывает по этой ссылке другой вариант товара, а не запрошенный. Чтобы не выдать анализ не того товара, не публикую. Пришли ссылку ещё раз чуть позже.")
             tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: Ozon подменил вариант товара, не опубликовал\n{url}")
             data=None
         elif not data:
-            tg_msg(chat,"Не смог собрать карточку по этой ссылке :( Проверь ссылку.")
+            tg_msg(chat,"👻УПС что-то сломалось, наверное в карточке нет отзывов. Пришли ссылку позже.")
+            tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: не собрал карточку (битая/неподдерживаемая ссылка, напр. ЯМ)\n{url}")
         elif (not (data.get("stars") and sum(int(v or 0) for v in data["stars"].values())>0)) and not (
                 data.get("name") and (data.get("reviews_pool_total") or 0)>0):
             # Нет звёзд И это НЕ честный 0: пул отзывов не собрался (reviews_pool_total==0) ИЛИ
             # карточка не загрузилась → сбой сборщика (антибот/занятый браузер) → честный отказ.
             # ЧЕСТНЫЙ 0 (пул собран, но по этому itemId 0 отзывов) — сюда НЕ попадает, публикуется ниже.
-            tg_msg(chat,"👻УПС - что то сломалось\nСобрал карточку, но не смог собрать отзывы/рейтинг. Пришли ссылку ещё раз чуть позже.")
             tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: собрал карточку, но не отзывы/рейтинг (сбой сборщика)\n{url}")
             data=None
         elif not _photo_ok(data.get("photo")):
             # Фото товара ОБЯЗАТЕЛЬНО. Неполный анализ (без фото) НЕ публикуем даже после ретраев —
             # честно просим повторить, чтобы собрать всё (владелец, 2026-10-24).
-            tg_msg(chat,"👻Почти собрал, но не подтянулось фото товара. Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
             tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: не подтянулось фото товара, не опубликовал\n{url}")
             data=None
         elif not (YGPT_KEY or GEMINI_KEY or ANTHROPIC_KEY):
-            tg_msg(chat,"ИИ-анализ недоступен (нет ни одного ключа) — товар не публикую.")
             tg_msg(OWNER_CHAT,"🔴 Бот-аналитик: НЕТ НИ ОДНОГО ключа ИИ (YandexGPT/Gemini/Claude). Разбор невозможен.")
             an = None
         else:
@@ -1523,7 +1522,6 @@ def process_one():
                 print("run_analysis FAILED (все движки):", repr(e)[:500]); traceback.print_exc()
                 # НИКОГДА не публикуем фальшивку — честно сообщаем. И ТЕБЕ в личку ТОЧНУЮ причину,
                 # чтобы ты видела что сломалось, даже если ссылку кидал другой человек.
-                tg_msg(chat,"Не смог сделать разбор — ИИ сейчас недоступен. Пришли ссылку ещё раз чуть позже.")
                 tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик НЕ собрал карточку (все движки ИИ упали)\n{url}\nПричина: {repr(e)[:300]}")
                 an = None
         if data and an is not None:
@@ -1607,7 +1605,6 @@ def process_one():
                 post_card(chat, entry, "/tmp/card.png")
             else:
                 _wd_th.join(timeout=2)  # не бросаем поток висеть
-                tg_msg(chat,"👻Почти готово: разобрал карточку и отзывы, но не собралась аналитика MPStats (продажи/ниша). Чтобы не отдавать неполный анализ — пришли ссылку ещё раз чуть позже, добью.")
                 tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: MPStats-разделы не собрались, не опубликовал\n{url}")
     finally:
         q2=sread(QUEUE_CELL); rest=[x for x in q2.split("\n") if x.strip() and not x.startswith(msgid+"|")]
