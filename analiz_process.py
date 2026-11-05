@@ -342,6 +342,63 @@ def oz_collect(pid, timeout=420, url=None):
             except Exception: return None
     return None
 
+def ym_collect(url, timeout=1200):
+    # ЯМ: карточка + ВСЕ отзывы собираются браузером на ПК (РФ-IP). Отзывы ЯМ грузятся JS'ом и
+    # недоступны из облака (SmartCaptcha). Сбор ДОЛГИЙ (прокрутка всех отзывов), поэтому скрипт
+    # запускаем ОТКРЕПЛЁННО (Start-Process) — команда PS-агента возвращается сразу (не упирается в
+    # его таймаут), а результат ym_card_pc.py САМ пишет в ячейку N1 (nonce|base64), отзывы — в M10:M..
+    if not _pc_heartbeat_fresh():
+        wait_start = time.time()
+        while time.time() - wait_start < 1800:
+            time.sleep(30)
+            if _pc_heartbeat_fresh(): break
+        else:
+            return {"_pc_down": True}
+    import uuid
+    nonce = "n" + uuid.uuid4().hex[:12]
+    clean = url.split("?")[0]
+    mm = re.search(r"/(?:card|product)(?:--[^/]+)?/[^/?]*?(\d{6,})", clean) or re.search(r"(\d{6,})", clean)
+    pid = mm.group(1) if mm else ""
+    RESULT_CELL = "Лист1!N1"
+    swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+           "for($i=0;$i -lt 4;$i++){try{irm 'https://storage.yandexcloud.net/asfarm-analiz-pc/ym_card_pc.py' -OutFile \"$d\\ym_card_pc.py\";break}catch{Start-Sleep 5}};"
+           f"Start-Process -FilePath $py -ArgumentList @(\"$d\\ym_card_pc.py\",\"{clean}\",\"{nonce}\") -WindowStyle Hidden")
+    start = time.time()
+    while time.time() - start < timeout:
+        time.sleep(15)
+        nv = sread(RESULT_CELL)
+        if not nv.startswith(nonce + "|"):
+            continue  # старый/чужой результат — ждём свой nonce
+        rest = nv[len(nonce) + 1:]
+        if rest == "RUNNING":
+            continue  # скрипт ещё собирает
+        if rest.startswith("ERR"):
+            print("ym_card_pc error:", rest[:150]); return None
+        try:
+            d = json.loads(base64.b64decode(rest).decode("utf-8"))
+        except Exception:
+            continue
+        if str(d.get("pid") or "") != str(pid):
+            continue
+        reviews = d.get("reviews") or []
+        rs = d.get("reviews_store")
+        if rs and str(rs.get("nonce")) == nonce:
+            try:
+                st = int(rs.get("start_row") or 10); n = int(rs.get("chunks") or 0)
+                rows = sread_col(f"Лист1!M{st}:M{st+n-1}")
+                parts = {}
+                for cellv in rows:
+                    mm2 = re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
+                    if mm2 and mm2.group(1) == nonce: parts[int(mm2.group(2))] = mm2.group(3)
+                if len(parts) == n and n > 0:
+                    blob = "".join(parts[i] for i in range(n))
+                    reviews = json.loads(base64.b64decode(blob).decode("utf-8"))
+            except Exception as e:
+                print("YM reviews_store read FAILED:", repr(e)[:150])
+        d["reviews"] = reviews
+        return d
+    return None
+
 def mpstats_via_pc(platform, sku, url, name, nterms, timeout=300):
     # MPStats режет зарубежный IP GitHub (401) -> зовём его С ПК (российский IP) через тот же
     # пультовый канал, что и сбор Ozon: ПК качает mpstats_pc.py из бакета владельца, гоняет и
@@ -1477,6 +1534,9 @@ def process_one():
                         dd["price"], dd["price_old"] = pr.get("price"), pr.get("price_old")
                         if pr.get("in_stock") is not None: dd["in_stock"] = pr.get("in_stock")
                 return dd
+            elif re.search(r"market\.yandex\.", url):
+                # ЯМ: карточка+все отзывы собираются браузером на ПК (РФ-IP; отзывы — JS-рендер).
+                return ym_collect(url)
             return None
         # ДОЛБИМ сбор, пока не соберётся ВСЁ нужное (отзывы/рейтинг И ФОТО). Частичный анализ
         # (напр. без фото товара) публиковать НЕЛЬЗЯ — лучше ещё раз собрать (владелец, 2026-10-24).
@@ -1587,17 +1647,20 @@ def process_one():
                     except Exception as _e: print("wordstat failed:", repr(_e)[:150])
             _wd_th=threading.Thread(target=_wd_worker, daemon=True); _wd_th.start()
             mpd=None
-            for _m in range(3):
-                try:
-                    # MPStats — ТОЛЬКО через ПК (российский IP): из Actions MPStats отдаёт 401.
-                    mpd = mpstats_via_pc(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
-                except Exception as _e:
-                    print("mpstats via pc failed:", repr(_e)[:200]); mpd=None
-                if _mp_ok(mpd): break
-                if _m<2:
-                    print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
-            if _mp_ok(mpd):
-                entry["mpstats"]=mpd
+            _is_ym = (data["platform"] == "YM")  # MPStats покрывает только WB/Ozon — для ЯМ его нет
+            if not _is_ym:
+                for _m in range(3):
+                    try:
+                        # MPStats — ТОЛЬКО через ПК (российский IP): из Actions MPStats отдаёт 401.
+                        mpd = mpstats_via_pc(data["platform"], str(data.get("nm") or data.get("pid")), data["url"], data.get("name",""), nterms)
+                    except Exception as _e:
+                        print("mpstats via pc failed:", repr(_e)[:200]); mpd=None
+                    if _mp_ok(mpd): break
+                    if _m<2:
+                        print(f"MPStats-блок неполный — повтор {_m+2}/3"); time.sleep(15)
+            if _mp_ok(mpd) or _is_ym:
+                # ЯМ публикуем БЕЗ MPStats-разделов (их нет для ЯМ); WB/Ozon — только с MPStats.
+                if _mp_ok(mpd): entry["mpstats"]=mpd
                 _wd_th.join(timeout=60)  # дожидаемся Вордстат (обычно уже готов за время MPStats)
                 if _wd_box.get("wd"): entry["wordstat"]=_wd_box["wd"]
                 card_png(entry, "/tmp/card.png")
