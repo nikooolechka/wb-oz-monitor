@@ -10,6 +10,7 @@
     "Dental50",
     "Dental_100",
     "Dental_100_banan",
+    "Dental_100_natural",
     "Dental_100_zemlyanika",
     "Dental_20_zemlyanika",
     "Dental_40",
@@ -291,6 +292,14 @@
     "ОЗОН|animal_nabor": {
       "ref": "100х120х40",
       "last": "100х120х40"
+    },
+    "ВБ|Dental_100_natural": {
+      "ref": "11х6х14",
+      "last": "11х6х14"
+    },
+    "ОЗОН|Dental_100_natural": {
+      "ref": "6х14х11",
+      "last": "6х14х11"
     }
   }
 }
