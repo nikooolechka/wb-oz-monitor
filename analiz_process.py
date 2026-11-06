@@ -11,7 +11,8 @@ from collections import Counter
 SA = json.loads(os.environ["GSHEETS_SA_JSON"])
 PULT = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"
 QUEUE_CELL = "Лист1!M1"; BUSY_CELL = "Лист1!M2"; MAINT_CELL = "Лист1!M4"  # M4 начинается с "1" = тех-работы
-PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3"; PRICE_HB = "Лист1!A4"
+PRICE_CMD = "Лист1!A2"; PRICE_LOG = "Лист1!A1"; PRICE_ST = "Лист1!A3"; PRICE_HB = "Лист1!A4"  # Lazareva (запасной ПК)
+AFBOT_CMD = "Лист1!C2"; AFBOT_LOG = "Лист1!C1"; AFBOT_HB = "Лист1!C4"  # af-bot (основной ПК по умолчанию)
 BOT = os.environ["ANALIZ_BOT_TOKEN"]
 DASH_REPO = "nikooolechka/nikooolechka.github.io"
 GH_PAT = os.environ["GH_PAT"]
@@ -221,11 +222,15 @@ def wb_collect(nm):
     return out
 
 # ---------- Ozon сбор (через ПК по пульту) ----------
-def _pc_heartbeat_fresh(max_age_sec=600):
-    """ПК-агент пишет heartbeat 'alive YYYY-MM-DD HH:MM:SS' в A4 каждые ~120с.
-    Свежий heartbeat = сессия ПК жива и слушает команды."""
+# Авто-детект python в PS-команде: сначала путь Lazareva ($d\py), если нет — путь af-bot
+# (%LOCALAPPDATA%\Programs\Python\Python312). Одна и та же команда работает на ОБОИХ ПК.
+PY_DETECT = ("$py=\"$d\\py\\python.exe\";if(-not(Test-Path $py)){"
+             "$py=\"$env:LOCALAPPDATA\\Programs\\Python\\Python312\\python.exe\"};")
+
+def _hb_fresh(cell, max_age_sec=600):
+    """Heartbeat 'alive YYYY-MM-DD HH:MM:SS' (МСК) в указанной ячейке свежий?"""
     import datetime
-    hb = sread(PRICE_HB)
+    hb = sread(cell)
     m = re.search(r"(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})", hb or "")
     if not m: return False
     try:
@@ -234,6 +239,17 @@ def _pc_heartbeat_fresh(max_age_sec=600):
         now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=3)))
         return (now - t).total_seconds() < max_age_sec
     except Exception: return False
+
+def _pults_live():
+    """Живые ПК в порядке приоритета: af-bot (колонка C) первым, Lazareva (колонка A) запасным.
+    Возвращает список (имя, cmd_cell, log_cell) только для тех, у кого свежий heartbeat."""
+    order = [("af-bot", AFBOT_CMD, AFBOT_LOG, AFBOT_HB),
+             ("Lazareva", PRICE_CMD, PRICE_LOG, PRICE_HB)]
+    return [(n, c, l) for n, c, l, h in order if _hb_fresh(h)]
+
+def _pc_heartbeat_fresh(max_age_sec=600):
+    """Жив хотя бы один ПК (af-bot ИЛИ Lazareva) и слушает команды."""
+    return _hb_fresh(AFBOT_HB, max_age_sec) or _hb_fresh(PRICE_HB, max_age_sec)
 
 def wb_price_pc(nm, timeout=300):
     """Живая цена WB с витрины — только через ПК-браузер (card.wb.ru блокирует отовсюду).
@@ -246,20 +262,23 @@ def wb_price_pc(nm, timeout=300):
             if _pc_heartbeat_fresh(): break
         else:
             return None
-    swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+    cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";"+PY_DETECT+
            "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/wb_price_pc.py' -OutFile \"$d\\wb_price_pc.py\";"
            f"& $py \"$d\\wb_price_pc.py\" {nm} 2>&1 | Select-String 'WBPRICE' | Select-Object -Last 1")
-    start=time.time()
-    while time.time()-start<timeout:
-        time.sleep(15)
-        a1=sread(PRICE_LOG)
-        m=re.search(r"WBPRICE<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
-        if m:
-            try:
-                d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
-                # Возвращаем и наличие (есть/нет с живой страницы), даже если цены нет (OOS)
-                return {"price": d.get("price"), "price_old": d.get("price_old"), "in_stock": d.get("in_stock")}
-            except Exception: return None
+    for pcname, CMD, LOG in _pults_live():  # af-bot первым, при неудаче Lazareva
+        swrite(LOG, ""); time.sleep(1); swrite(CMD, cmd)
+        start=time.time()
+        while time.time()-start<timeout:
+            time.sleep(15)
+            a1=sread(LOG)
+            m=re.search(r"WBPRICE<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
+            if m:
+                try:
+                    d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
+                    # Возвращаем и наличие (есть/нет с живой страницы), даже если цены нет (OOS)
+                    return {"price": d.get("price"), "price_old": d.get("price_old"), "in_stock": d.get("in_stock")}
+                except Exception: break  # битый ответ на этом ПК -> пробуем следующий
+        # таймаут/сбой на этом ПК -> следующий (Lazareva)
     return None
 
 def oz_collect(pid, timeout=420, url=None):
@@ -286,60 +305,63 @@ def oz_collect(pid, timeout=420, url=None):
     # поэтому без nonce можно подхватить чужой/старый результат → отчёт уходил не на тот товар.
     import uuid
     nonce = "n" + uuid.uuid4().hex[:12]
-    swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+    cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";"+PY_DETECT+
            "irm 'https://storage.yandexcloud.net/asfarm-install-4d31f85f/oz_card_pc.py' -OutFile \"$d\\oz_card_pc.py\";"
            f"& $py \"$d\\oz_card_pc.py\" \"{arg}\" \"{nonce}\" 2>&1 | Select-String 'OZCARD64' | Select-Object -Last 1")
-    start=time.time()
-    while time.time()-start<timeout:
-        time.sleep(15)
-        a1=sread(PRICE_LOG)
-        m=re.search(r"OZCARD64<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
-        if m:
-            try:
-                d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
-                # Принимаем ТОЛЬКО результат с НАШИМ разовым кодом (и артикулом) — иначе это чужой/
-                # старый результат на общем пульте → ждём свежий. Это и держит очередь строго по
-                # порядку: каждый запрос получает ровно свой результат (23.10.2026).
-                if str(d.get("nonce") or "") != nonce or str(d.get("pid") or "") != str(pid):
-                    continue
-                if d.get("_sku_mismatch"):
-                    # Ozon упорно отдаёт ДРУГОЙ вариант группы вместо запрошенного — анализировать
-                    # под именем запрошенного нельзя (иначе два разных товара дадут один отчёт).
-                    return {"_wrong_variant": True, "served": d.get("_sku_mismatch")}
-                if d.get("name"):
-                    # БОЛЬШОЙ КАНАЛ ОТЗЫВОВ: если ПК положил все отзывы в диапазон ячеек (reviews_store)
-                    # — читаем их оттуда (так проходит 1000+ отзывов полным текстом, минуя лимит A1).
-                    reviews = d.get("reviews") or []
-                    rs = d.get("reviews_store")
-                    if rs and str(rs.get("nonce"))==nonce:
-                        try:
-                            start=int(rs.get("start_row") or 10); n=int(rs.get("chunks") or 0)
-                            rows=sread_col(f"Лист1!M{start}:M{start+n-1}")
-                            parts={}
-                            for cellv in rows:
-                                mm=re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
-                                if mm and mm.group(1)==nonce: parts[int(mm.group(2))]=mm.group(3)
-                            if len(parts)==n and n>0:
-                                blob="".join(parts[i] for i in range(n))
-                                reviews=json.loads(base64.b64decode(blob).decode("utf-8"))
-                        except Exception as e:
-                            print("reviews_store read FAILED (беру что в A1):", repr(e)[:150])
-                    # reviews_total по товару = РЕАЛЬНО собранные по ЭТОМУ SKU (reviews_all),
-                    # НЕ склеечный счётчик (15823 — на всю ГРУППУ вариантов, не на товар).
-                    return {"platform":"OZ","pid":pid,"url":f"https://www.ozon.ru/product/{pid}/",
-                            "name":d.get("name"),"brand":"","price":d.get("price_card") or d.get("price"),
-                            "price_old":d.get("price_old"),"rating":d.get("rating"),
-                            "reviews_total":d.get("reviews_all") or d.get("stars_collected") or 0,
-                            "reviews_pool_total":d.get("reviews_pool_total") or 0,
-                            "skleyka_reviews_count":d.get("skleyka_reviews_count"),
-                            "skleyka":d.get("skleyka") or [],
-                            "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
-                            "photo":(d.get("gallery") or [None])[0],
-                            "description":d.get("content_for_analysis") or "","sostav":"",
-                            "reviews":reviews,
-                            "questions":d.get("questions") or [], "questions_total":len(d.get("questions") or [])}
-                return None
-            except Exception: return None
+    for pcname, CMD, LOG in _pults_live():  # af-bot первым, при неудаче Lazareva
+        swrite(LOG, ""); time.sleep(1); swrite(CMD, cmd)
+        start=time.time()
+        while time.time()-start<timeout:
+            time.sleep(15)
+            a1=sread(LOG)
+            m=re.search(r"OZCARD64<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
+            if m:
+                try:
+                    d=json.loads(base64.b64decode(re.sub(r"\s","",m.group(1))).decode("utf-8"))
+                    # Принимаем ТОЛЬКО результат с НАШИМ разовым кодом (и артикулом) — иначе это чужой/
+                    # старый результат на общем пульте → ждём свежий. Это и держит очередь строго по
+                    # порядку: каждый запрос получает ровно свой результат (23.10.2026).
+                    if str(d.get("nonce") or "") != nonce or str(d.get("pid") or "") != str(pid):
+                        continue
+                    if d.get("_sku_mismatch"):
+                        # Ozon упорно отдаёт ДРУГОЙ вариант группы вместо запрошенного — анализировать
+                        # под именем запрошенного нельзя (иначе два разных товара дадут один отчёт).
+                        return {"_wrong_variant": True, "served": d.get("_sku_mismatch")}
+                    if d.get("name"):
+                        # БОЛЬШОЙ КАНАЛ ОТЗЫВОВ: если ПК положил все отзывы в диапазон ячеек (reviews_store)
+                        # — читаем их оттуда (так проходит 1000+ отзывов полным текстом, минуя лимит A1).
+                        reviews = d.get("reviews") or []
+                        rs = d.get("reviews_store")
+                        if rs and str(rs.get("nonce"))==nonce:
+                            try:
+                                srow=int(rs.get("start_row") or 10); n=int(rs.get("chunks") or 0)
+                                rows=sread_col(f"Лист1!M{srow}:M{srow+n-1}")
+                                parts={}
+                                for cellv in rows:
+                                    mm=re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
+                                    if mm and mm.group(1)==nonce: parts[int(mm.group(2))]=mm.group(3)
+                                if len(parts)==n and n>0:
+                                    blob="".join(parts[i] for i in range(n))
+                                    reviews=json.loads(base64.b64decode(blob).decode("utf-8"))
+                            except Exception as e:
+                                print("reviews_store read FAILED (беру что в A1):", repr(e)[:150])
+                        # reviews_total по товару = РЕАЛЬНО собранные по ЭТОМУ SKU (reviews_all),
+                        # НЕ склеечный счётчик (15823 — на всю ГРУППУ вариантов, не на товар).
+                        return {"platform":"OZ","pid":pid,"url":f"https://www.ozon.ru/product/{pid}/",
+                                "name":d.get("name"),"brand":"","price":d.get("price_card") or d.get("price"),
+                                "price_old":d.get("price_old"),"rating":d.get("rating"),
+                                "reviews_total":d.get("reviews_all") or d.get("stars_collected") or 0,
+                                "reviews_pool_total":d.get("reviews_pool_total") or 0,
+                                "skleyka_reviews_count":d.get("skleyka_reviews_count"),
+                                "skleyka":d.get("skleyka") or [],
+                                "stars":d.get("stars"),"stars_collected":d.get("stars_collected"),
+                                "photo":(d.get("gallery") or [None])[0],
+                                "description":d.get("content_for_analysis") or "","sostav":"",
+                                "reviews":reviews,
+                                "questions":d.get("questions") or [], "questions_total":len(d.get("questions") or [])}
+                    break  # распарсили, но без имени — плохой результат, пробуем следующий ПК
+                except Exception: break  # битый ответ -> следующий ПК
+        # таймаут/сбой на этом ПК -> следующий (Lazareva)
     return None
 
 def ym_collect(url, timeout=1200):
@@ -360,9 +382,11 @@ def ym_collect(url, timeout=1200):
     mm = re.search(r"/(?:card|product)(?:--[^/]+)?/[^/?]*?(\d{6,})", clean) or re.search(r"(\d{6,})", clean)
     pid = mm.group(1) if mm else ""
     RESULT_CELL = "Лист1!N1"
-    swrite(PRICE_CMD, "PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+    _ymcmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";"+PY_DETECT+
            "for($i=0;$i -lt 4;$i++){try{irm 'https://storage.yandexcloud.net/asfarm-analiz-pc/ym_card_pc.py' -OutFile \"$d\\ym_card_pc.py\";break}catch{Start-Sleep 5}};"
            f"Start-Process -FilePath $py -ArgumentList @(\"$d\\ym_card_pc.py\",\"{clean}\",\"{nonce}\") -WindowStyle Hidden")
+    _live = _pults_live()  # af-bot первым, иначе Lazareva (результат ym идёт в N1 независимо от ПК)
+    swrite(_live[0][1] if _live else PRICE_CMD, _ymcmd)
     start = time.time()
     while time.time() - start < timeout:
         time.sleep(15)
@@ -418,23 +442,25 @@ def mpstats_via_pc(platform, sku, url, name, nterms, timeout=300):
         return None
     nb = base64.b64encode((name or "").encode("utf-8")).decode() if name else "-"
     ntb = base64.b64encode(json.dumps(nterms or {}, ensure_ascii=False).encode("utf-8")).decode() if nterms else "-"
-    cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";$py=\"$d\\py\\python.exe\";"
+    cmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";"+PY_DETECT+
            "irm 'https://storage.yandexcloud.net/asfarm-analiz-pc/mpstats_pc.py' -OutFile \"$d\\mpstats_pc.py\";"
            f"& $py \"$d\\mpstats_pc.py\" \"{platform}\" \"{sku}\" \"{url}\" \"{nb}\" \"{ntb}\" \"{tok}\" \"{nonce}\" "
            "2>&1 | Select-String 'MPSTATS64' | Select-Object -Last 1")
-    swrite(PRICE_CMD, cmd)
-    start = time.time()
-    while time.time() - start < timeout:
-        time.sleep(15)
-        a1 = sread(PRICE_LOG)
-        m = re.search(r"MPSTATS64<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
-        if m:
-            try:
-                d = json.loads(base64.b64decode(re.sub(r"\s", "", m.group(1))).decode("utf-8"))
-                if str(d.get("nonce") or "") != nonce: continue   # чужой/старый результат на общем пульте
-                return d.get("mpstats")
-            except Exception: continue
-    print("mpstats_via_pc: таймаут, результата нет"); return None
+    for pcname, CMD, LOG in _pults_live():  # af-bot первым, при неудаче Lazareva
+        swrite(LOG, ""); time.sleep(1); swrite(CMD, cmd)
+        start = time.time()
+        while time.time() - start < timeout:
+            time.sleep(15)
+            a1 = sread(LOG)
+            m = re.search(r"MPSTATS64<<([A-Za-z0-9+/=\s]*?)>>", a1, re.S)
+            if m:
+                try:
+                    d = json.loads(base64.b64decode(re.sub(r"\s", "", m.group(1))).decode("utf-8"))
+                    if str(d.get("nonce") or "") != nonce: continue   # чужой/старый результат на пульте
+                    return d.get("mpstats")
+                except Exception: break   # битый ответ -> следующий ПК
+        # таймаут/сбой на этом ПК -> следующий (Lazareva)
+    print("mpstats_via_pc: ни один ПК не дал результат"); return None
 
 # ---------- Анализ — Claude (Anthropic API, ключ владельца, $100/мес бесплатных кредитов) ----------
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY")
