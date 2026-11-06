@@ -1,6 +1,6 @@
 {
   "мск|dental20": {
-    "last": 52,
+    "last": 51,
     "phase": "alerted_low"
   },
   "мск|dental20zemlyanika": {
@@ -12,7 +12,7 @@
     "phase": "alerted_low"
   },
   "мск|dental100zemlyanika": {
-    "last": 49,
+    "last": 48,
     "phase": "alerted_low"
   },
   "мск|dental100banan": {
@@ -40,7 +40,7 @@
     "phase": "armed"
   },
   "мск|spraydlyapolostyrta": {
-    "last": 82,
+    "last": 71,
     "phase": "alerted_low"
   },
   "мск|oralcherry": {
@@ -48,11 +48,11 @@
     "phase": "alerted_zero"
   },
   "мск|dental40natural": {
-    "last": 84,
+    "last": 79,
     "phase": "alerted_low"
   },
   "мск|dental40": {
-    "last": 63,
+    "last": 59,
     "phase": "alerted_low"
   },
   "мск|dental40zemlyanika": {
@@ -72,23 +72,23 @@
     "phase": "armed"
   },
   "мск|dental100": {
-    "last": 351,
+    "last": 350,
     "phase": "alerted_low"
   },
   "екб|dental20": {
-    "last": 152,
+    "last": 149,
     "phase": "armed"
   },
   "екб|dental20zemlyanika": {
-    "last": 39,
+    "last": 31,
     "phase": "alerted_low"
   },
   "екб|dental50": {
-    "last": 21,
-    "phase": "armed"
+    "last": 17,
+    "phase": "alerted_low"
   },
   "екб|dental100banan": {
-    "last": 79,
+    "last": 78,
     "phase": "armed"
   },
   "екб|criol25new": {
@@ -124,7 +124,7 @@
     "phase": "alerted_low"
   },
   "екб|dental40zemlyanika": {
-    "last": 94,
+    "last": 91,
     "phase": "armed"
   },
   "екб|extractpihta": {
@@ -216,7 +216,7 @@
     "phase": "alerted_low"
   },
   "екб|dental100zemlyanika": {
-    "last": 85,
+    "last": 82,
     "phase": "armed"
   },
   "екб|oralcherry": {
@@ -224,7 +224,7 @@
     "phase": "alerted_low"
   },
   "екб|dental100": {
-    "last": 80,
+    "last": 77,
     "phase": "alerted_low"
   }
 }
