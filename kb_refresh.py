@@ -11,6 +11,7 @@ DIFY = os.environ.get("DIFY_BASE", "http://82.148.225.41")
 DKEY = os.environ["KB_DATASET_KEY"]  # ТОЛЬКО из секрета — репо публичный, ключ в код НЕ класть
 WB_DS = "36022934-9298-41a5-afd1-6c5212724d63"
 OZ_DS = "1beefd57-68ac-4d5c-af47-79cb71f3f8c9"
+S1C_DS = "f02d4b9c-c10b-488c-b17b-5eb9f49b109a"  # база 1С (остатки/составы из 1С)
 
 def _sa():
     j = os.environ.get("GSHEETS_SA_JSON")
@@ -25,7 +26,8 @@ def rng(sid, a1):
 def _dify(method, path, body=None, timeout=60):
     req = urllib.request.Request(f"{DIFY}{path}", data=(json.dumps(body).encode() if body is not None else None),
         headers={"Authorization": f"Bearer {DKEY}", "Content-Type": "application/json"}, method=method)
-    return json.load(urllib.request.urlopen(req, timeout=timeout))
+    raw = urllib.request.urlopen(req, timeout=timeout).read().decode().strip()
+    return json.loads(raw) if raw else {}   # DELETE отдаёт пустой 204
 
 def replace_doc(ds_id, name, text):
     # удалить прошлые версии этого LIVE-дока по имени, создать свежую
@@ -106,7 +108,8 @@ if __name__ == "__main__":
     # цены — в свою базу; остатки и матрица — в обе (товары общие, спросят под любым маркером)
     if wb_pr: replace_doc(WB_DS, "🔄 LIVE — цены WB", wb_pr)
     if oz_pr: replace_doc(OZ_DS, "🔄 LIVE — цены Ozon", oz_pr)
-    for ds in (WB_DS, OZ_DS):
+    # остатки и матрица (составы) — 1С-данные: в обе маркет-базы И в базу 1С (маркер «1С»)
+    for ds in (WB_DS, OZ_DS, S1C_DS):
         if stock: replace_doc(ds, "🔄 LIVE — остатки на складе", stock)
         if matrix: replace_doc(ds, "🔄 LIVE — матрица (габариты/состав)", matrix)
     print("готово")
