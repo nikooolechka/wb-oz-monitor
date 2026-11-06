@@ -1,0 +1,20 @@
+name: kb_refresh
+on:
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: deps
+        run: pip install -q google-auth google-api-python-client
+      - name: refresh
+        env:
+          GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
+          KB_DATASET_KEY: ${{ secrets.KB_DATASET_KEY }}
+          DIFY_BASE: ${{ secrets.DIFY_BASE }}
+        run: python kb_refresh.py
