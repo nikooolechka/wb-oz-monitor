@@ -385,42 +385,47 @@ def ym_collect(url, timeout=1200):
     _ymcmd = ("PS:$env:PYTHONIOENCODING='utf-8';$d=\"$env:USERPROFILE\\asfarm\";"+PY_DETECT+
            "for($i=0;$i -lt 4;$i++){try{irm 'https://storage.yandexcloud.net/asfarm-analiz-pc/ym_card_pc.py' -OutFile \"$d\\ym_card_pc.py\";break}catch{Start-Sleep 5}};"
            f"Start-Process -FilePath $py -ArgumentList @(\"$d\\ym_card_pc.py\",\"{clean}\",\"{nonce}\") -WindowStyle Hidden")
-    _live = _pults_live()  # af-bot первым, иначе Lazareva (результат ym идёт в N1 независимо от ПК)
-    swrite(_live[0][1] if _live else PRICE_CMD, _ymcmd)
-    start = time.time()
-    while time.time() - start < timeout:
-        time.sleep(15)
-        nv = sread(RESULT_CELL)
-        if not nv.startswith(nonce + "|"):
-            continue  # старый/чужой результат — ждём свой nonce
-        rest = nv[len(nonce) + 1:]
-        if rest == "RUNNING":
-            continue  # скрипт ещё собирает
-        if rest.startswith("ERR"):
-            print("ym_card_pc error:", rest[:150]); return None
-        try:
-            d = json.loads(base64.b64decode(rest).decode("utf-8"))
-        except Exception:
-            continue
-        if str(d.get("pid") or "") != str(pid):
-            continue
-        reviews = d.get("reviews") or []
-        rs = d.get("reviews_store")
-        if rs and str(rs.get("nonce")) == nonce:
+    # ФОЛБЭК как у oz_collect: перебираем живые ПК (af-bot первым, Lazareva запасным). Если af-bot
+    # не отдаёт результат (ERR/таймаут) — повторяем на Lazareva тем же nonce (результат идёт в N1).
+    _live = _pults_live() or [("Lazareva", PRICE_CMD, PRICE_LOG)]
+    per_pc = max(360, int(timeout / max(1, len(_live))))  # делим бюджет времени между ПК
+    for pcname, CMD, LOG in _live:
+        swrite(CMD, _ymcmd)   # открепл. запуск на этом ПК; результат придёт в N1 (по nonce)
+        t0 = time.time()
+        while time.time() - t0 < per_pc:
+            time.sleep(15)
+            nv = sread(RESULT_CELL)
+            if not nv.startswith(nonce + "|"):
+                continue  # старый/чужой результат — ждём свой nonce
+            rest = nv[len(nonce) + 1:]
+            if rest == "RUNNING":
+                continue  # скрипт ещё собирает
+            if rest.startswith("ERR"):
+                print(f"ym_card_pc error on {pcname}:", rest[:150]); break  # -> следующий ПК (Lazareva)
             try:
-                st = int(rs.get("start_row") or 10); n = int(rs.get("chunks") or 0)
-                rows = sread_col(f"Лист1!M{st}:M{st+n-1}")
-                parts = {}
-                for cellv in rows:
-                    mm2 = re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
-                    if mm2 and mm2.group(1) == nonce: parts[int(mm2.group(2))] = mm2.group(3)
-                if len(parts) == n and n > 0:
-                    blob = "".join(parts[i] for i in range(n))
-                    reviews = json.loads(base64.b64decode(blob).decode("utf-8"))
-            except Exception as e:
-                print("YM reviews_store read FAILED:", repr(e)[:150])
-        d["reviews"] = reviews
-        return d
+                d = json.loads(base64.b64decode(rest).decode("utf-8"))
+            except Exception:
+                continue
+            if str(d.get("pid") or "") != str(pid):
+                continue
+            reviews = d.get("reviews") or []
+            rs = d.get("reviews_store")
+            if rs and str(rs.get("nonce")) == nonce:
+                try:
+                    st = int(rs.get("start_row") or 10); n = int(rs.get("chunks") or 0)
+                    rows = sread_col(f"Лист1!M{st}:M{st+n-1}")
+                    parts = {}
+                    for cellv in rows:
+                        mm2 = re.match(r"^([^|]+)\|(\d+)\|(.*)$", cellv, re.S)
+                        if mm2 and mm2.group(1) == nonce: parts[int(mm2.group(2))] = mm2.group(3)
+                    if len(parts) == n and n > 0:
+                        blob = "".join(parts[i] for i in range(n))
+                        reviews = json.loads(base64.b64decode(blob).decode("utf-8"))
+                except Exception as e:
+                    print("YM reviews_store read FAILED:", repr(e)[:150])
+            d["reviews"] = reviews
+            return d
+        # таймаут/ERR на этом ПК -> следующий (Lazareva)
     return None
 
 def mpstats_via_pc(platform, sku, url, name, nterms, timeout=300):
