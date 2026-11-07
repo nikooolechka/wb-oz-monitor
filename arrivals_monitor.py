@@ -196,6 +196,7 @@ def main():
     alerts = []
     for (key, scheme, name, wid), qty in current.items():
         last = st.get(key)
+        last = last.get("q") if isinstance(last, dict) else last
         # рост от базы = приход; впервые увиденный ключ считаем приходом ТОЛЬКО для нового
         # WB-FBS склада (появился склад с товаром). Суммарные FBO/Ozon-ключи при первом
         # появлении (например, источник восстановился после сбоя) НЕ алертим — просто база.
@@ -212,17 +213,37 @@ def main():
                 alerts.append(f"<b>Поставка принята: {scheme} — +{delta} шт (всего {qty} на складах).</b>")
         st[key] = qty
     # Ozon FBS — алерт НЕ на приход, а на НИЗКИЙ остаток (близко к нулю), ПО АРТИКУЛАМ.
-    # Пороги: денталы <100, 18+ орал-спреи <100, остальное <20. Алерт ОДИН раз на переходе в "мало"
-    # (был >=порога -> стал <порога), без спама; восстановится выше порога -> снова вооружён.
+    # Пороги: денталы <100, 18+ орал-спреи <100, остальное <20.
+    # 🔴 АНТИ-СПАМ (владелец 2026-11-07, с матом): один артикул трубит РОВНО ОДИН РАЗ,
+    # когда впервые упал ниже порога. Дальше МОЛЧИТ (сколько бы ни колебался у нуля) —
+    # пока реально НЕ пополнят ВЫШЕ порога (только тогда снова вооружается). Все
+    # заканчивающиеся за прогон собираются в ОДНО сообщение, а не десятки отдельных.
+    # Состояние на артикул: {"q": present, "alerted": bool}.
+    # Тихая миграция: что уже ниже порога сейчас (нули, списанные) → alerted=True без алерта.
+    oz_low = []
     try:
-        for offer, present in oz_fbs_per_article().items():
-            thr = oz_thr(offer); k = f"OZFBS|{offer}"; last = st.get(k)
-            if initialized and last is not None and last >= thr and present < thr:
-                alerts.append(f"<b>⚠️ Озон FBS заканчивается: {offer} — {present} шт (порог {thr}).</b>")
-            print(f"  OZ-FBS   {offer[:24]:24} fbs={present} (было {last}) порог={thr}")
-            st[k] = present
+        for offer, present in sorted(oz_fbs_per_article().items()):
+            thr = oz_thr(offer); k = f"OZFBS|{offer}"
+            prev = st.get(k)
+            if isinstance(prev, dict):
+                alerted = bool(prev.get("alerted"))
+            elif isinstance(prev, (int, float)):
+                alerted = prev < thr          # уже было ниже порога → считаем уже оттрубленным
+            else:
+                alerted = False               # новый артикул → вооружён
+            if present < thr:
+                if initialized and not alerted:
+                    oz_low.append((offer, present, thr))   # впервые упал → в общий список
+                alerted = True                             # запомнили: больше не трубим
+            else:
+                alerted = False                            # пополнили выше порога → снова вооружён
+            st[k] = {"q": present, "alerted": alerted}
+            print(f"  OZ-FBS   {offer[:24]:24} fbs={present} порог={thr} alerted={alerted}")
     except Exception as _e:
         print("Ozon FBS low-stock упал:", str(_e)[:80])
+    if oz_low:
+        lines = "\n".join(f"• {o} — {p} шт (порог {t})" for o, p, t in oz_low)
+        alerts.append("<b>⚠️ Озон FBS заканчивается:</b>\n" + lines)
     st["_init"] = True
 
     if not initialized:
@@ -233,7 +254,7 @@ def main():
             notify.send(msg); time.sleep(0.5)
     if not DRY:
         save_state(st)
-    print(f"итого складов: {len(current)} | приходов-алертов: {len(alerts) if initialized else 0}")
+    print(f"итого складов: {len(current)} | алертов: {len(alerts) if initialized else 0}")
 
 
 if __name__ == "__main__":
