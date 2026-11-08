@@ -1,40 +1,130 @@
 {
   "WBFBS|1884480": 7622,
-  "WBFBS|2033332": 1458,
-  "WBFBS|2198231": 804,
+  "WBFBS|2033332": 1380,
+  "WBFBS|2198231": 803,
   "OZFBS": 13226,
   "OZFBO": 13124,
   "_init": true,
   "WBFBO": 10615,
-  "WBFBS|2250153": 895,
-  "OZFBS|Cryolipolysis50": 241,
-  "OZFBS|cryolipolysis25": 190,
-  "OZFBS|Dental20": 3533,
-  "OZFBS|CrioGel1l": 0,
-  "OZFBS|CrioL50": 169,
-  "OZFBS|Dental50": 528,
-  "OZFBS|OptikaSpray_new": 0,
-  "OZFBS|Dental_40": 9248,
-  "OZFBS|Crio_L25(new)": 125,
-  "OZFBS|Dental_100": 5815,
-  "OZFBS|Irrigator_500": 1248,
-  "OZFBS|Gel_peeling": 0,
-  "OZFBS|spraydlyapolostyrta": 2187,
-  "OZFBS|Spray_fresh_new": 0,
-  "OZFBS|Irrigator_1000": 0,
-  "OZFBS|CrioGel_5": 0,
-  "OZFBS|Dental100_Animal": 0,
-  "OZFBS|Dental_100_banan": 818,
-  "OZFBS|Dental_100_zemlyanika": 651,
-  "OZFBS|Dental_40_zemlyanika": 7848,
-  "OZFBS|Dental_20_zemlyanika": 8964,
-  "OZFBS|Dental_40_natural": 4582,
-  "OZFBS|Zub_pasta_det": 2242,
-  "OZFBS|Oral_cherry": 3459,
-  "OZFBS|makeup_30": 216,
-  "OZFBS|extract_pihta": 154,
-  "OZFBS|extract_romashka": 214,
-  "OZFBS|makeup_50": 521,
-  "OZFBS|irrigator_new_05": 88,
-  "OZFBS|irrigator_new_1": 11
+  "WBFBS|2250153": 821,
+  "OZFBS|Cryolipolysis50": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|cryolipolysis25": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental20": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|CrioGel1l": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|CrioL50": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental50": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|OptikaSpray_new": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_40": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Crio_L25(new)": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_100": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Irrigator_500": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Gel_peeling": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|spraydlyapolostyrta": {
+    "q": 1,
+    "alerted": true
+  },
+  "OZFBS|Spray_fresh_new": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Irrigator_1000": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|CrioGel_5": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental100_Animal": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_100_banan": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_100_zemlyanika": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_40_zemlyanika": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_20_zemlyanika": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Dental_40_natural": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Zub_pasta_det": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|Oral_cherry": {
+    "q": 1,
+    "alerted": true
+  },
+  "OZFBS|makeup_30": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|extract_pihta": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|extract_romashka": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|makeup_50": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|irrigator_new_05": {
+    "q": 0,
+    "alerted": true
+  },
+  "OZFBS|irrigator_new_1": {
+    "q": 0,
+    "alerted": true
+  }
 }
