@@ -87,13 +87,17 @@ def doc_matrix():
         return -1
     cC = 2  # артикул в C
     cV = col("габарит"); cS = col("состав"); cT = col("свойств"); cU = col("применен")
-    out = ["# Матрица товаров: габариты, состав, свойства, применение"]
+    cVes = col("вес"); cObVB = col("объем вб"); cObOZ = col("объем оз")
+    out = ["# Матрица товаров: габариты, ВЕС, объём, состав, свойства, применение"]
     for r in v[2:]:
         def g(i): return (r[i].strip().replace("\n", " ") if 0 <= i < len(r) and r[i] else "")
         art = g(cC)
         if not art: continue
         parts = []
-        if g(cV): parts.append(f"габариты {g(cV)}")
+        if g(cV): parts.append(f"габариты {g(cV)} см")
+        if g(cVes): parts.append(f"вес {g(cVes)} кг")
+        if g(cObVB): parts.append(f"объём ВБ {g(cObVB)} л")
+        if g(cObOZ): parts.append(f"объём Озон {g(cObOZ)} л")
         if g(cS): parts.append(f"состав: {g(cS)[:300]}")
         if g(cT): parts.append(f"свойства: {g(cT)[:300]}")
         if g(cU): parts.append(f"применение: {g(cU)[:300]}")
