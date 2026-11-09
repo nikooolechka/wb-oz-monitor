@@ -1,12 +1,12 @@
 {
   "WBFBS|1884480": 7622,
-  "WBFBS|2033332": 1380,
+  "WBFBS|2033332": 1340,
   "WBFBS|2198231": 803,
   "OZFBS": 13226,
   "OZFBO": 13124,
   "_init": true,
   "WBFBO": 10615,
-  "WBFBS|2250153": 821,
+  "WBFBS|2250153": 798,
   "OZFBS|Cryolipolysis50": {
     "q": 0,
     "alerted": true
@@ -56,7 +56,7 @@
     "alerted": true
   },
   "OZFBS|spraydlyapolostyrta": {
-    "q": 1,
+    "q": 0,
     "alerted": true
   },
   "OZFBS|Spray_fresh_new": {
@@ -64,8 +64,8 @@
     "alerted": true
   },
   "OZFBS|Irrigator_1000": {
-    "q": 0,
-    "alerted": true
+    "q": 799,
+    "alerted": false
   },
   "OZFBS|CrioGel_5": {
     "q": 0,
@@ -92,15 +92,15 @@
     "alerted": true
   },
   "OZFBS|Dental_40_natural": {
-    "q": 0,
-    "alerted": true
+    "q": 612,
+    "alerted": false
   },
   "OZFBS|Zub_pasta_det": {
     "q": 0,
     "alerted": true
   },
   "OZFBS|Oral_cherry": {
-    "q": 1,
+    "q": 0,
     "alerted": true
   },
   "OZFBS|makeup_30": {
