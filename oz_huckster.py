@@ -322,26 +322,31 @@ def check_item_freshness():
     except Exception:
         st = {}
     now = msk().replace(tzinfo=None); day = 8 <= now.hour < 20
+    froze = []    # (mp, uid, since) — ВПЕРВЫЕ отвалились
+    recov = []    # (mp, uid)        — вернулись
     for mp, items in STALE_ITEMS.items():
         cur = {u for u, _ in items}
         since = {}
         for u, lu in items:
             try: since[u] = datetime.datetime.strptime(lu, "%Y-%m-%dT%H:%M:%S").strftime("%d.%m %H:%M")
             except Exception: since[u] = "?"
-        alerted = set(st.get(mp, {}).get("alerted", []))
-        to_alert = sorted(cur - alerted)       # замёрзли и ещё не сообщали
-        recovered = sorted(alerted - cur)      # о них сообщали, теперь снова свежие
-        if to_alert and day:
-            lines = "\n".join(f"• {u} — висит с {since.get(u, '?')}" for u in to_alert)
-            notify(f"<b>❗️Huckster отвалился по товарам ({MP_NAME.get(mp, mp)})</b>\n"
-                   f"Цена не обновляется — пишу пометку «не обновляется» вместо старого числа:\n{lines}\n\n"
-                   f"Обычно товар выпал из активной стратегии репрайсера. Проверь кабинет Huckster.")
-            alerted |= set(to_alert)
-        if recovered and day:
-            notify(f"<b>✅ Huckster снова обновляет ({MP_NAME.get(mp, mp)})</b>\n"
-                   + "\n".join(f"• {u}" for u in recovered))
-            alerted -= set(recovered)
+        alerted = set(st.get(mp, {}).get("alerted", []))   # о чём уже сообщали (и ждём возврата)
+        if day:
+            new = sorted(cur - alerted); rec = sorted(alerted - cur)
+            froze += [(mp, u, since.get(u, "?")) for u in new]
+            recov += [(mp, u) for u in rec]
+            alerted = (alerted | set(new)) - set(rec)
+        # ночью (20-8) состояние НЕ двигаем -> замёрзшее ночью дождётся утра, не теряем и не шлём ночью
         st[mp] = {"alerted": sorted(alerted)}
+    # ОДНО сообщение на все отвалившиеся сразу; потом тишина до возврата
+    if froze:
+        lines = "\n".join(f"• {MP_NAME.get(mp, mp)}: {u} — висит с {s}" for mp, u, s in froze)
+        notify(f"<b>❗️Huckster отвалился по товарам</b>\n"
+               f"Цена не обновляется — пишу пометку «не обновляется» вместо старого числа:\n{lines}\n\n"
+               f"Обычно товар выпал из активной стратегии репрайсера. Проверь кабинет Huckster.")
+    if recov:
+        lines = "\n".join(f"• {MP_NAME.get(mp, mp)}: {u}" for mp, u in recov)
+        notify(f"<b>✅ Huckster снова обновляет цены</b>\n{lines}")
     gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(tabn+'!A1')}?valueInputOption=RAW",
          {"values": [[json.dumps(st, ensure_ascii=False)]]})
 
