@@ -92,6 +92,28 @@ def wb_dospp():
         return {g["nmID"]: int(round(g["sizes"][0]["discountedPrice"])) for g in d["data"]["listGoods"] if g.get("sizes")}
     except Exception as e:
         print("WB API err", str(e)[:60]); return {}
+def wb_vendorcode_map():
+    """vendorCode (= наш текстовый артикул, норм.) -> nmID, через WB Content API (cards/list).
+    Резерв на случай, когда у строки ещё нет гиперссылки в столбце B и нет в хардкод-словаре WB_SKU —
+    так новый товар подхватывается АВТОМАТИЧЕСКИ, если его карточка уже создана на WB."""
+    out = {}
+    headers = {"Authorization": WB_TOKEN, "Content-Type": "application/json"}
+    cursor = {"limit": 100}
+    for _ in range(50):
+        body = {"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}}
+        try:
+            r = urllib.request.Request("https://content-api.wildberries.ru/content/v2/get/cards/list",
+                                        data=json.dumps(body).encode(), headers=headers, method="POST")
+            d = json.loads(urllib.request.urlopen(r, context=CTX, timeout=60).read())
+        except Exception as e:
+            print("WB content-api err", str(e)[:60]); break
+        for c in (d.get("cards") or []):
+            vc, nm = c.get("vendorCode"), c.get("nmID")
+            if vc and nm: out[norm(vc)] = nm
+        cur = d.get("cursor") or {}
+        if cur.get("total", 0) < cursor.get("limit", 100): break
+        cursor = {"limit": 100, "updatedAt": cur.get("updatedAt"), "nmID": cur.get("nmID")}
+    return out
 def oz_prices(offer_ids):
     try:
         r = urllib.request.Request("https://api-seller.ozon.ru/v5/product/info/prices", data=json.dumps({"filter":{"offer_id":offer_ids,"visibility":"ALL"},"limit":200}).encode(), headers=OZH, method="POST")
@@ -133,6 +155,21 @@ for i, rw in enumerate(rrB):
         mm = re.search(r"/catalog/(\d+)/", link); nm = int(mm.group(1)) if mm else None
     if nm is None: nm = WB_SKU.get(norm(art))
     wb_rows.append((str(art).strip(), 2 + i, nm))
+# Строки без nmID (нет ссылки в B и нет в WB_SKU) -> доискиваем по vendorCode через Content API.
+# Это автоматика на будущее: новый товар не требует правки кода, достаточно чтобы на WB была создана карточка
+# с vendorCode = нашему текстовому артикулу (как у всех текущих товаров).
+if any(nm is None for _, _, nm in wb_rows):
+    VCMAP = wb_vendorcode_map()
+    fixed = []
+    for art, row, nm in wb_rows:
+        if nm is None:
+            nm2 = VCMAP.get(norm(art))
+            if nm2:
+                nm = nm2
+            else:
+                print(f"[WB до-СПП] нет nmID для «{art}»: ни ссылки в B, ни в WB_SKU, ни карточки на WB с таким vendorCode — скорее всего товар ещё не выставлен на WB")
+        fixed.append((art, row, nm))
+    wb_rows = fixed
 Hb = col("H2:H60"); oz_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Hb) if r and str(r[0]).strip()]
 Ob = col("O2:O60"); ym_rows = [(str(r[0]).strip(), 2 + i) for i, r in enumerate(Ob) if r and str(r[0]).strip()]
 
