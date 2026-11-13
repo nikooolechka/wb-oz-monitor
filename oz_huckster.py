@@ -24,8 +24,9 @@ STATE_TAB = "oz_alert_state"
 FRESH_TAB = "huck_fresh_state"
 FRESH_MAX_H = 2      # Huckster не обновлял цены маркетплейса дольше -> алерт (28.10.2026: Ozon встал с 10:20, цены «замёрзли», алертов не было)
 LAST_UPD = {}        # mp -> самый свежий last_update (МСК, ISO) среди активных товаров
+STALE_ITEMS = {}     # mp -> [(uid, lu), ...] товары, по которым Huckster перестал обновлять цену (отвалился)
 KEEP_DAYS = 14
-STALE_H = 8          # товар с last_update старше -> НЕ пишем цену (Huckster перестал парсить, напр. enabled:False -> цена «замёрзла». 13.11.2026: makeup_30 и ещё 14 товаров висели на цене от 06.11, т.к. не в активной стратегии)
+STALE_H = 8          # товар с last_update старше -> НЕ пишем цену (Huckster перестал парсить, напр. enabled:False -> цена «замёрзла». 13.11.2026: makeup_30 и ещё 11 товаров висели на цене от 06.11, т.к. не в активной стратегии)
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "-1004333189794").strip()
@@ -103,6 +104,7 @@ def huckster_cards(H, mp, shop):
             stale.append((it.get("uid"), lu))   # цена не обновлялась -> НЕ пишем (не выдаём старое за сегодняшнее)
             continue
         out[it["uid"]] = int(round(cp))
+    STALE_ITEMS[mp] = stale
     if stale:
         print(f"[WARN] {mp}: пропущено {len(stale)} товаров с устаревшей ценой (>{STALE_H}ч, не пишу): "
               + ", ".join(f"{u}({t})" for u, t in stale))
@@ -309,6 +311,40 @@ def check_freshness():
     gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(FRESH_TAB+'!A1')}?valueInputOption=RAW",
          {"values": [[json.dumps(st, ensure_ascii=False)]]})
 
+def check_item_freshness():
+    """Отдельные товары, по которым Huckster перестал обновлять цену (last_update устарел),
+       хотя рынок в целом может быть свежим. Один алерт при заморозке + «ожило» при возврате.
+       Ночью (20-8) не шлём; замороженное ночью дождётся утреннего прогона (не теряем)."""
+    tabn = "huck_item_stale_state"
+    ensure_tab(tabn)
+    try:
+        v = read_vals(f"{tabn}!A1"); st = json.loads(v[0][0]) if v and v[0] and v[0][0] else {}
+    except Exception:
+        st = {}
+    now = msk().replace(tzinfo=None); day = 8 <= now.hour < 20
+    for mp, items in STALE_ITEMS.items():
+        cur = {u for u, _ in items}
+        since = {}
+        for u, lu in items:
+            try: since[u] = datetime.datetime.strptime(lu, "%Y-%m-%dT%H:%M:%S").strftime("%d.%m %H:%M")
+            except Exception: since[u] = "?"
+        alerted = set(st.get(mp, {}).get("alerted", []))
+        to_alert = sorted(cur - alerted)       # замёрзли и ещё не сообщали
+        recovered = sorted(alerted - cur)      # о них сообщали, теперь снова свежие
+        if to_alert and day:
+            lines = "\n".join(f"• {u} — висит с {since.get(u, '?')}" for u in to_alert)
+            notify(f"<b>❗️Huckster отвалился по товарам ({MP_NAME.get(mp, mp)})</b>\n"
+                   f"Цена не обновляется — пишу пометку «не обновляется» вместо старого числа:\n{lines}\n\n"
+                   f"Обычно товар выпал из активной стратегии репрайсера. Проверь кабинет Huckster.")
+            alerted |= set(to_alert)
+        if recovered and day:
+            notify(f"<b>✅ Huckster снова обновляет ({MP_NAME.get(mp, mp)})</b>\n"
+                   + "\n".join(f"• {u}" for u in recovered))
+            alerted -= set(recovered)
+        st[mp] = {"alerted": sorted(alerted)}
+    gapi("PUT", f"https://sheets.googleapis.com/v4/spreadsheets/{SHEET}/values/{urllib.parse.quote(tabn+'!A1')}?valueInputOption=RAW",
+         {"values": [[json.dumps(st, ensure_ascii=False)]]})
+
 def main():
     H = huckster_session()
     for mp, shop, tab in MARKETS:
@@ -321,6 +357,10 @@ def main():
         if mp == "ozon":
             check_alerts(cards)          # вилки/алерты пока только по Ozon
         record(cards, tab)
+    try:
+        check_item_freshness()
+    except Exception as e:
+        print(f"[WARN] проверка товаров (заморозка Huckster): {e}")
     try:
         check_freshness()
     except Exception as e:
