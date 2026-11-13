@@ -6,7 +6,7 @@
   "OZFBO": 13124,
   "_init": true,
   "WBFBO": 10615,
-  "WBFBS|2250153": 746,
+  "WBFBS|2250153": 730,
   "OZFBS|Cryolipolysis50": {
     "q": 0,
     "alerted": true
@@ -64,8 +64,8 @@
     "alerted": true
   },
   "OZFBS|Irrigator_1000": {
-    "q": 799,
-    "alerted": false
+    "q": 0,
+    "alerted": true
   },
   "OZFBS|CrioGel_5": {
     "q": 0,
@@ -92,7 +92,7 @@
     "alerted": true
   },
   "OZFBS|Dental_40_natural": {
-    "q": 613,
+    "q": 610,
     "alerted": false
   },
   "OZFBS|Zub_pasta_det": {
