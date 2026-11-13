@@ -25,6 +25,7 @@ FRESH_TAB = "huck_fresh_state"
 FRESH_MAX_H = 2      # Huckster не обновлял цены маркетплейса дольше -> алерт (28.10.2026: Ozon встал с 10:20, цены «замёрзли», алертов не было)
 LAST_UPD = {}        # mp -> самый свежий last_update (МСК, ISO) среди активных товаров
 KEEP_DAYS = 14
+STALE_H = 8          # товар с last_update старше -> НЕ пишем цену (Huckster перестал парсить, напр. enabled:False -> цена «замёрзла». 13.11.2026: makeup_30 и ещё 14 товаров висели на цене от 06.11, т.к. не в активной стратегии)
 
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "-1004333189794").strip()
@@ -86,12 +87,25 @@ def huckster_cards(H, mp, shop):
         headers=H, method="POST")
     items = json.loads(urllib.request.urlopen(r, context=CTX, timeout=30).read()).get("result", [])
     out = {}
+    stale = []
+    now = msk()
     for it in items:
         cp = it.get("market_card_price")
-        if it.get("parsing_status") == "Работает" and cp:   # активные с ценой
-            out[it["uid"]] = int(round(cp))
-            lu = (it.get("last_update") or "")[:19]
-            if lu > LAST_UPD.get(mp, ""): LAST_UPD[mp] = lu
+        if not (it.get("parsing_status") == "Работает" and cp):   # активные с ценой
+            continue
+        lu = (it.get("last_update") or "")[:19]
+        if lu > LAST_UPD.get(mp, ""): LAST_UPD[mp] = lu   # для сторожа свежести (макс по рынку) — учитываем и застрявшие
+        try:
+            dt = datetime.datetime.strptime(lu, "%Y-%m-%dT%H:%M:%S")
+        except Exception:
+            dt = None
+        if dt is not None and (now - dt).total_seconds() > STALE_H * 3600:
+            stale.append((it.get("uid"), lu))   # цена не обновлялась -> НЕ пишем (не выдаём старое за сегодняшнее)
+            continue
+        out[it["uid"]] = int(round(cp))
+    if stale:
+        print(f"[WARN] {mp}: пропущено {len(stale)} товаров с устаревшей ценой (>{STALE_H}ч, не пишу): "
+              + ", ".join(f"{u}({t})" for u, t in stale))
     return out
 
 # ---- Google Sheets ----
