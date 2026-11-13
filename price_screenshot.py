@@ -55,7 +55,7 @@ GID = 0
 # пустом блоке скрин не выродился.
 SCREEN_BLOCKS = [
     {"left": "B", "right": "M", "art_cols": ["B", "H"]},  # ВБ + Озон
-    {"left": "O", "right": "AD", "art_cols": ["O", "U", "AA"]},  # ЯМ + Дет Мир + Золотое Яблоко (AD = скидка по промокоду ЗЯ)
+    {"left": "O", "right": "AE", "art_cols": ["O", "U", "AA"]},  # ЯМ + Дет Мир + Золотое Яблоко (AE = серый разделитель после блока ЗЯ)
 ]
 MIN_LAST = 6
 STATE_FILE = "data/price_screenshot_state.json"
