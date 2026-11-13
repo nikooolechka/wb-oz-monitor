@@ -27,8 +27,9 @@ WB_SKU = {"dental100":205348527,"dental100zemlyanika":583154383,"dental100banan"
 "dental50":140595726,"irrigator500":227067968,"irrigator1000":363137625,"spraydlyapolostyrta":349314212,
 "criogel1l":93054004,"criogel5":388153628,"cryolipolysis25":76942273,"cryolipolysis50":87180591,
 "criol25new":97076035,"criol50":144662550,"optikaspraynew":206024627,"zubpastadet":917665198,"oralcherry":1055320329}
-OOS = "не в продаже"; ERR = "ошибка"
+OOS = "не в продаже"; ERR = "ошибка"; STALE = "не обновляется"
 OOS_STATUSES = {"нет на складе", "out_of_stock", "нет в наличии", "outofstock"}
+STALE_H = 8   # last_update старше -> Huckster отвалился по товару (не в продаже тут ни при чём): не пишем старое число, ставим пометку
 
 def norm(s): return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 def msk(): return datetime.datetime.utcnow() + datetime.timedelta(hours=3)
@@ -58,17 +59,27 @@ def huck(mp, shop):
         data=json.dumps({"marketplace": mp, "shop_id": shop, "limit": 200, "offset": 0}).encode(), headers=HH, method="POST")
     out = {}
     for it in json.loads(urllib.request.urlopen(r, context=CTX, timeout=30).read()).get("result", []):
-        out[norm(it.get("uid", ""))] = {"mp": it.get("market_price"), "cp": it.get("market_card_price"), "st": it.get("parsing_status")}
+        out[norm(it.get("uid", ""))] = {"mp": it.get("market_price"), "cp": it.get("market_card_price"),
+                                        "st": it.get("parsing_status"), "lu": (it.get("last_update") or "")[:19]}
     return out
 HO = huck("ozon", "189077_FBO"); HW = huck("wildberries", "1884480"); HY = huck("yandex", "22610087")
 print(f"Huckster: ozon={len(HO)} wb={len(HW)} ym={len(HY)}")
 
+def _stale(lu):
+    try:
+        dt = datetime.datetime.strptime((lu or "")[:19], "%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return False
+    return (msk() - dt).total_seconds() > STALE_H * 3600
+
 def vit(rec, which):
-    """Витринное значение по правилам OOS/ошибка. which='mp'|'cp'. rec=None -> None (не трогать)."""
+    """Витринное значение по правилам OOS/ошибка/устарело. which='mp'|'cp'. rec=None -> None (не трогать)."""
     if rec is None:
         return None  # товара нет в Huckster -> не трогаем ячейку
     st = (rec.get("st") or "").strip(); v = rec.get(which)
     if st == "Работает" and v and v > 0:
+        if _stale(rec.get("lu")):
+            return STALE  # Huckster перестал обновлять этот товар -> не пишем старое число
         return int(round(v))
     if norm(st) in {norm(x) for x in OOS_STATUSES}:
         return OOS
