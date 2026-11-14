@@ -134,6 +134,11 @@
       "status": "ok",
       "oz_dims": "10×22×10",
       "oz_vol": 2.2
+    },
+    "Dental_100_natural": {
+      "status": "ok",
+      "oz_dims": "14×11×6",
+      "oz_vol": 0.924
     }
   }
 }
