@@ -93,6 +93,12 @@ def _scrapfly(key):
 
 
 def run():
+    # 🛑 ПАУЗА (владелец 2026-11-16): постер намеренно остановлен до ребрендинга, dzen_sync не бегает —
+    # поэтому сторож ложно тревожит про «залипшую» автосверку. Молчим, пока постер не вернём (PAUSED=False).
+    PAUSED = True
+    if PAUSED:
+        print("[watchdog] постер на паузе (ребрендинг) — сторож автосверки молчит", flush=True)
+        return
     now = datetime.now(MSK).replace(microsecond=0)
     key = os.environ.get("SCRAPFLY_KEY", "").strip()
     try:
