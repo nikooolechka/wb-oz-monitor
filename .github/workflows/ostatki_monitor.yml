@@ -29,10 +29,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install google-auth requests PyMuPDF Pillow
+      - run: pip install google-auth requests PyMuPDF Pillow openpyxl
       - name: Прогон
         env:
           MAILRU_APP_PASS: ${{ secrets.MAILRU_APP_PASS }}
+          ROP_APP_PASS: ${{ secrets.ROP_APP_PASS }}
           GSHEETS_SA_JSON: ${{ secrets.GSHEETS_SA_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           OSTATKI_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
