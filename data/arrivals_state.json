@@ -1,12 +1,12 @@
 {
   "WBFBS|1884480": 7622,
   "WBFBS|2033332": 0,
-  "WBFBS|2198231": 799,
+  "WBFBS|2198231": 798,
   "OZFBS": 13226,
   "OZFBO": 13124,
   "_init": true,
   "WBFBO": 10615,
-  "WBFBS|2250153": 723,
+  "WBFBS|2250153": 716,
   "OZFBS|Cryolipolysis50": {
     "q": 0,
     "alerted": true
@@ -92,7 +92,7 @@
     "alerted": true
   },
   "OZFBS|Dental_40_natural": {
-    "q": 609,
+    "q": 608,
     "alerted": false
   },
   "OZFBS|Zub_pasta_det": {
