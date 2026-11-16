@@ -2,12 +2,13 @@
 # Остатки 1С: письмо -> вкладка «остатки» (обновляю ТОЛЬКО «Свободно»).
 # Матч: по «Номенклатура 1С», запас — по «Артикул» (тогда подставляю реальную номенклатуру из письма).
 # Артикул есть, в письме нет -> 0. Новый артикул -> добавляю строкой. Скрин = ВСЕ строки и столбцы.
-# ENV: MAILRU_APP_PASS, GSHEETS_SA_JSON|GSHEETS_SA_FILE, TELEGRAM_BOT_TOKEN, OSTATKI_CHAT_ID, DRY
+# ENV: ROP_APP_PASS (Яндекс app-пароль rop_mp), GSHEETS_SA_JSON|GSHEETS_SA_FILE, TELEGRAM_BOT_TOKEN, OSTATKI_CHAT_ID, DRY
+# 2026-11-16: письмо остатков 1С переехало на rop_mp@as-farm.ru (Яндекс 360). Тема «АВТО Остатки для маркетов от DD.MM.YYYY», вложение XLSX «СТМ НА МАРКЕТЫ с потребностями» (раньше HTML в zip на nikol-oleinik@mail.ru).
 import os,sys,re,html,ssl,json,io,urllib.request,urllib.parse,imaplib,email,zipfile,datetime
 from email.header import decode_header
 CTX=ssl._create_unverified_context()
 SID="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; TAB="остатки"; GID=1290662357
-MAIL_USER="nikol-oleinik@mail.ru"; SENDER="as-farm-as-farm@yandex.ru"
+ROP_USER="rop_mp@as-farm.ru"; IMAP_HOST="imap.yandex.ru"; TRASH="Trash"; SENDER="as-farm-as-farm@yandex.ru"
 DRY=os.environ.get("DRY")=="1"
 DEMAND=os.environ.get("DEMAND_DATA","").strip()
 def dec(s):
@@ -25,6 +26,7 @@ def article(name):
     # списанные Dental100_Animal (салфетки)/Lapomoyka и Irrigator_1000_nabor3 сюда НЕ попадут.
     if ("набор" in n) and ("животн" in n):
         return "animal_nabor"
+    if "животн" in n: return ""  # списанные животные товары (напр. «Салфетки ...за зубками ЖИВОТНЫХ») — НЕ учитываем, иначе раздуют Dental_100
     if "экстракт" in n and "купан" in n:
         if "ромашк" in n: return "extract_romashka"
         if "пихт" in n: return "extract_pihta"
@@ -73,12 +75,13 @@ if DEMAND:
     print(f'[DEMAND] товаров {len(items)} итог {total}')
 else:
     # 1. письмо
-    PASS=os.environ["MAILRU_APP_PASS"]
-    M=imaplib.IMAP4_SSL("imap.mail.ru",ssl_context=CTX); M.login(MAIL_USER,PASS); M.select("INBOX")
+    PASS=os.environ["ROP_APP_PASS"]
+    M=imaplib.IMAP4_SSL(IMAP_HOST,ssl_context=CTX); M.login(ROP_USER,PASS); M.select("INBOX")
     typ,dj=M.search(None,f'(FROM "{SENDER}")'); ost_uids=[]; latest=None
     for i in dj[0].split():
-        typ,d=M.fetch(i,"(RFC822)"); msg=email.message_from_bytes(d[0][1]); subj=dec(msg.get("Subject"))
-        if "Остатки товаров" in subj: ost_uids.append(i); latest=(i,msg,subj)
+        typ,d=M.fetch(i,"(RFC822)"); msg=email.message_from_bytes(d[0][1]); subj=dec(msg.get("Subject")); sl=subj.lower()
+        # НОВАЯ тема «АВТО Остатки для маркетов от DD.MM.YYYY» (рецептуры не трогаем — у них нет «маркет»)
+        if "остатк" in sl and "маркет" in sl: ost_uids.append(i); latest=(i,msg,subj)
     if not latest: print("нет письма остатков"); (M and M.logout()); raise SystemExit(0)
     i,msg,subj=latest
     m=re.search(r"от\s+(\d{2})\.(\d{2})\.(\d{4})",subj); datestr=f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else datetime.date.today().strftime("%d.%m.%Y")
@@ -87,26 +90,24 @@ else:
         _dt=parsedate_to_datetime(msg.get("Date")).astimezone(datetime.timezone(datetime.timedelta(hours=3))); timestr=_dt.strftime("%H:%M")
     except Exception: timestr=""
     title=(f"Остатки на складе — на {datestr} {timestr}").strip()
-    htmltext=None
+    # 2. парс XLSX («Лист_1»: A=Номенклатура, D=Остаток, E=Резерв, F=Свободно; отчёт сгруппирован — заголовки групп/чужие товары -> article()='' отсеются)
+    xlsx=None
     for p in msg.walk():
-        fn=p.get_filename()
-        if fn and dec(fn).lower().endswith(".zip"):
-            z=zipfile.ZipFile(io.BytesIO(p.get_payload(decode=True)))
-            for nm in z.namelist():
-                if nm.lower().endswith(".html"): htmltext=z.read(nm).decode("utf-8-sig")
-    if not htmltext: print("нет HTML"); (M and M.logout()); raise SystemExit(1)
-
-    # 2. парс + сверка
-    def cells(tr): return [re.sub(r"\s+"," ",html.unescape(re.sub(r"<[^>]+>"," ",c))).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",tr,re.S|re.I)]
+        if p.get_content_type().endswith("spreadsheetml.sheet") or dec(p.get_filename() or "").lower().endswith(".xlsx"):
+            xlsx=p.get_payload(decode=True); break
+    if not xlsx: print("нет XLSX"); (M and M.logout()); raise SystemExit(1)
+    import openpyxl
+    ws=openpyxl.load_workbook(io.BytesIO(xlsx),data_only=True).worksheets[0]
     items={}; total=None
-    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>",htmltext,re.S|re.I):
-        c=cells(tr)
-        if len(c)==9 and c[0].startswith("Шпиндовск"): total=n1c(c[6]); continue  # С склада гот.прод. (правый блок), НЕ Итого
-        if len(c)!=10 or not c[0] or c[0]=="Номенклатура, Артикул": continue
-        items[norm(c[0])]=(c[0],n1c(c[7]))  # ТОЛЬКО Свободно «Склад готовой продукции ИП Шпиндовский» (правый блок idx7), НЕ Итого idx4
+    for row in ws.iter_rows(min_row=4,values_only=True):
+        name=(str(row[0]).strip() if row and row[0] is not None else "")
+        if not name or name.startswith("Номенклатура"): continue
+        free=row[5] if len(row)>5 else None
+        if free is None or str(free).strip()=="": continue
+        fv=int(free) if isinstance(free,(int,float)) else n1c(str(free))
+        items[norm(name)]=(name,fv)
     svsum=sum(v[1] for v in items.values())
-    print(f"товаров: {len(items)} | сумма Свободно: {svsum} | итог 1С: {total}")
-    if total is not None and svsum!=total: print("СВЕРКА НЕ СОШЛАСЬ — не пишу"); (M and M.logout()); raise SystemExit(1)
+    print(f"строк с Свободно: {len(items)} | сумма (с группами): {svsum}")
 # индекс письма по артикулу
 by_art={}
 for k,(raw,sv) in items.items(): by_art.setdefault(article(raw),[]).append(k)
@@ -131,7 +132,7 @@ if not DEMAND:
     if _last==_today:
         print("дневные остатки уже отправлены сегодня — пропуск (защита от дубля)")
         try:
-            for _u in ost_uids: M.copy(_u,"&BBoEPgRABDcEOAQ9BDA-"); M.store(_u,"+FLAGS","\\Deleted")
+            for _u in ost_uids: M.copy(_u,TRASH); M.store(_u,"+FLAGS","\\Deleted")
             M.expunge()
         except Exception: pass
         (M and M.logout()); raise SystemExit(0)
@@ -193,7 +194,8 @@ for ri in range(2,len(vals)):
 # новые (в письме, нет в листе) -> дописать строкой; Артикул = ЖИРНОЕ "новая позиция",
 # чтобы владелец увидела в скрине и прислала настоящий артикул. Шкалы у новой строки НЕТ
 # (нет потребности -> D пустая, без ошибки). Свободно всё равно собираем и показываем.
-new=[(k,items[k]) for k in items if k not in used]
+# только НАШИ товары (article!=''), не группы-заголовки «Зубы/Крио/Разное» и не чужие СТМ из широкого отчёта «СТМ НА МАРКЕТЫ»
+new=[(k,items[k]) for k in items if k not in used and article(items[k][0])]
 rowbase=last_data_row+1
 newfmt=[]
 for j,(k,(raw,sv)) in enumerate(new):
@@ -411,7 +413,7 @@ if DRY: print("[DRY] письмо не удаляю")
 elif sent and not DEMAND and os.environ.get("NODELETE")!="1":
     # НЕ уничтожаем письмо: ПЕРЕМЕЩАЕМ в Корзину (аудит — всегда можно поднять первоисточник 1С).
     # Если перенос не удался — письмо ОСТАВЛЯЕМ в INBOX (не expunge), чтобы не потерять.
-    TRASH="&BBoEPgRABDcEOAQ9BDA-"  # Корзина (IMAP modified UTF-7)
+    # TRASH="Trash" (Яндекс) задан в константах выше
     moved=0
     for u in ost_uids:
         try:
