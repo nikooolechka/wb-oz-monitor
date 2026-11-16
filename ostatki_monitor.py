@@ -74,6 +74,11 @@ if DEMAND:
     M=None; ost_uids=[]
     print(f'[DEMAND] товаров {len(items)} итог {total}')
 else:
+    # 🛑 ПАУЗА ДНЕВНОЙ РАССЫЛКИ (владелец 2026-11-16): новый отчёт «СТМ НА МАРКЕТЫ» не совпадает с реальными остатками.
+    # Включить обратно = PAUSED=False, когда 1С даст адекватный отчёт. Ручной съём «остатки» (DEMAND, живой 1С) НЕ затронут.
+    PAUSED=True
+    if PAUSED:
+        print("🛑 остатки-рассылка на ПАУЗЕ (отчёт 1С неадекватный) — ничего не делаю"); raise SystemExit(0)
     # 1. письмо
     PASS=os.environ["ROP_APP_PASS"]
     M=imaplib.IMAP4_SSL(IMAP_HOST,ssl_context=CTX); M.login(ROP_USER,PASS); M.select("INBOX")
