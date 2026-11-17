@@ -3,7 +3,7 @@
 # Матч: по «Номенклатура 1С», запас — по «Артикул» (тогда подставляю реальную номенклатуру из письма).
 # Артикул есть, в письме нет -> 0. Новый артикул -> добавляю строкой. Скрин = ВСЕ строки и столбцы.
 # ENV: ROP_APP_PASS (Яндекс app-пароль rop_mp), GSHEETS_SA_JSON|GSHEETS_SA_FILE, TELEGRAM_BOT_TOKEN, OSTATKI_CHAT_ID, DRY
-# 2026-11-16: письмо остатков 1С переехало на rop_mp@as-farm.ru (Яндекс 360). Тема «АВТО Остатки для маркетов от DD.MM.YYYY», вложение XLSX «СТМ НА МАРКЕТЫ с потребностями» (раньше HTML в zip на nikol-oleinik@mail.ru).
+# 2026-11-16: письмо переехало на rop_mp@as-farm.ru (Яндекс 360). 2026-11-17: берём ИМЕННО «Остатки товаров ИП Шпиндовский» (HTML в zip, ~12:00) — настоящие ИП-остатки. «АВТО Остатки для маркетов» (XLSX, ~09:00) — ДРУГАЯ ООО-рассылка, её ведёт ooo_stock, тут НЕ брать.
 import os,sys,re,html,ssl,json,io,urllib.request,urllib.parse,imaplib,email,zipfile,datetime
 from email.header import decode_header
 CTX=ssl._create_unverified_context()
@@ -85,8 +85,8 @@ else:
     typ,dj=M.search(None,f'(FROM "{SENDER}")'); ost_uids=[]; latest=None
     for i in dj[0].split():
         typ,d=M.fetch(i,"(RFC822)"); msg=email.message_from_bytes(d[0][1]); subj=dec(msg.get("Subject")); sl=subj.lower()
-        # НОВАЯ тема «АВТО Остатки для маркетов от DD.MM.YYYY» (рецептуры не трогаем — у них нет «маркет»)
-        if "остатк" in sl and "маркет" in sl: ost_uids.append(i); latest=(i,msg,subj)
+        # ИП-остатки = «Остатки товаров ИП Шпиндовский» (HTML-zip, ~12:00). НЕ «…для маркетов» (ООО, XLSX, ~09:00), НЕ рецептуры.
+        if "остатк" in sl and "шпиндовск" in sl: ost_uids.append(i); latest=(i,msg,subj)
     if not latest: print("нет письма остатков"); (M and M.logout()); raise SystemExit(0)
     i,msg,subj=latest
     m=re.search(r"от\s+(\d{2})\.(\d{2})\.(\d{4})",subj); datestr=f"{m.group(1)}.{m.group(2)}.{m.group(3)}" if m else datetime.date.today().strftime("%d.%m.%Y")
@@ -95,24 +95,30 @@ else:
         _dt=parsedate_to_datetime(msg.get("Date")).astimezone(datetime.timezone(datetime.timedelta(hours=3))); timestr=_dt.strftime("%H:%M")
     except Exception: timestr=""
     title=(f"Остатки на складе — на {datestr} {timestr}").strip()
-    # 2. парс XLSX («Лист_1»: A=Номенклатура, D=Остаток, E=Резерв, F=Свободно; отчёт сгруппирован — заголовки групп/чужие товары -> article()='' отсеются)
-    xlsx=None
+    # 2. парс HTML в zip: строки <tr> len10=товар ([4]=Свободно, итого по всем складам), len9 «Шпиндовский»=итог 1С (пропуск+сверка).
+    zf=None
     for p in msg.walk():
-        if p.get_content_type().endswith("spreadsheetml.sheet") or dec(p.get_filename() or "").lower().endswith(".xlsx"):
-            xlsx=p.get_payload(decode=True); break
-    if not xlsx: print("нет XLSX"); (M and M.logout()); raise SystemExit(1)
-    import openpyxl
-    ws=openpyxl.load_workbook(io.BytesIO(xlsx),data_only=True).worksheets[0]
+        fn=dec(p.get_filename() or "")
+        if p.get_content_type()=="application/zip" or fn.lower().endswith(".zip"):
+            zf=p.get_payload(decode=True); break
+    if not zf: print("нет вложения zip"); (M and M.logout()); raise SystemExit(1)
+    _z=zipfile.ZipFile(io.BytesIO(zf)); _raw=_z.read(_z.namelist()[0]); htmltxt=None
+    for _e in ("utf-8","cp1251","utf-16"):
+        try: htmltxt=_raw.decode(_e); break
+        except Exception: htmltxt=_raw.decode("utf-8","replace")
+    def _cells(r): return [html.unescape(re.sub("<[^>]+>","",c)).strip() for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>",r,re.S|re.I)]
     items={}; total=None
-    for row in ws.iter_rows(min_row=4,values_only=True):
-        name=(str(row[0]).strip() if row and row[0] is not None else "")
-        if not name or name.startswith("Номенклатура"): continue
-        free=row[5] if len(row)>5 else None
-        if free is None or str(free).strip()=="": continue
-        fv=int(free) if isinstance(free,(int,float)) else n1c(str(free))
-        items[norm(name)]=(name,fv)
+    for _r in re.findall(r"<tr[^>]*>(.*?)</tr>",htmltxt,re.S|re.I):
+        c=_cells(_r)
+        if len(c)==9 and "шпиндовск" in c[0].lower(): total=n1c(c[3]); continue
+        if len(c)!=10: continue
+        name=c[0].strip()
+        if not name: continue
+        items[norm(name)]=(name,n1c(c[4]))
     svsum=sum(v[1] for v in items.values())
-    print(f"строк с Свободно: {len(items)} | сумма (с группами): {svsum}")
+    print(f"строк с Свободно: {len(items)} | сумма: {svsum} | итог 1С: {total}")
+    if total is not None and svsum!=total:
+        print(f"сумма {svsum} != итог 1С {total} — письмо битое, НЕ пишу"); (M and M.logout()); raise SystemExit(1)
 # индекс письма по артикулу
 by_art={}
 for k,(raw,sv) in items.items(): by_art.setdefault(article(raw),[]).append(k)
