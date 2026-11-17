@@ -1,8 +1,4 @@
 {
-  "2026-11-10": [
-    "morning",
-    "evening"
-  ],
   "2026-11-11": [
     "morning",
     "evening"
@@ -24,5 +20,8 @@
   "2026-11-16": [
     "morning",
     "evening"
+  ],
+  "2026-11-17": [
+    "morning"
   ]
 }
