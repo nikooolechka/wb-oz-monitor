@@ -6,7 +6,7 @@
   "OZFBO": 13124,
   "_init": true,
   "WBFBO": 10615,
-  "WBFBS|2250153": 716,
+  "WBFBS|2250153": 709,
   "OZFBS|Cryolipolysis50": {
     "q": 0,
     "alerted": true
@@ -92,7 +92,7 @@
     "alerted": true
   },
   "OZFBS|Dental_40_natural": {
-    "q": 608,
+    "q": 603,
     "alerted": false
   },
   "OZFBS|Zub_pasta_det": {
