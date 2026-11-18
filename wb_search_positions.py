@@ -73,7 +73,8 @@ def main():
             validate_payload(latest)
             history=request(push_url.rsplit('/',1)[0]+'/wb-history.json?check='+str(time.time_ns()))
             assert history.get(report_date)==latest,'Archive and latest daily report differ'
-            print('Already collected report '+report_date+'; full report and archive validated; WB API was not called');return
+            publish(latest,push_url,key)
+            print('Already collected report '+report_date+'; authenticated publication and archive validated; WB API was not called');return
     except (ApiError,OSError,ValueError,AssertionError):pass
     rows=catalog(token)
     if len(rows)>50:raise ApiError('WB report supports at most 50 items per request; explicit batch design required')
