@@ -210,6 +210,9 @@ for art, row in oz_rows:
     n = norm(art)
     if n in ozapi: put("J", row, ozapi[n])
     rec = HO.get(n)
+    if rec is not None and (vit(rec, "mp") == ERR or vit(rec, "cp") == ERR):
+        # Keep the rejected source response for diagnosis; price-writing rules stay unchanged.
+        print("[OZ_SOURCE_ERROR] " + json.dumps({"article": art, "source": rec}, ensure_ascii=False), flush=True)
     put("K", row, vit(rec, "mp"))
     put("L", row, vit(rec, "cp"))
 # ЯМ: P=API, Q=Huckster mp, R=Huckster cp
