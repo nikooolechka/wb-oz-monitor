@@ -1,0 +1,32 @@
+name: WB search queries for yesterday
+on:
+  schedule:
+    - cron: '0 7 * * *'  # 10:00 Moscow
+    - cron: '0 9 * * *'  # reserve; skips after a successful daily report
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: wb-search-positions
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect yesterday and verify published report
+        env:
+          WB_TOKEN: ${{ secrets.WB_TOKEN }}
+          WB_POSITIONS_PUSH_URL: http://82.148.225.41:8096/wb-update
+          WB_POSITIONS_PUSH_KEY: ${{ secrets.WB_POSITIONS_PUSH_KEY }}
+          WB_REPORT_OUTPUT: wb-report-result.json
+        run: python3 wb_search_positions.py
+      - name: Keep obtained report if publication fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wb-search-report
+          path: wb-report-result.json
+          if-no-files-found: ignore
+          retention-days: 7
