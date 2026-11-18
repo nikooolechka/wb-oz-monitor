@@ -67,16 +67,18 @@ def main():
     token=os.environ['WB_TOKEN'].strip();push_url=os.environ['WB_POSITIONS_PUSH_URL'].strip();key=os.environ['WB_POSITIONS_PUSH_KEY'].strip()
     report_date=yesterday().isoformat()
     latest_url=push_url.rsplit('/',1)[0]+'/wb-positions.json'
+    rows=catalog(token)
+    print('WB catalog verified: '+str(len(rows))+' products')
+    latest=None
     try:
         latest=request(latest_url+'?check='+str(time.time_ns()))
-        if latest.get('marketplace')=='wb' and latest.get('status')=='ok' and latest.get('report_date')==report_date:
-            validate_payload(latest)
-            history=request(push_url.rsplit('/',1)[0]+'/wb-history.json?check='+str(time.time_ns()))
-            assert history.get(report_date)==latest,'Archive and latest daily report differ'
-            publish(latest,push_url,key)
-            print('Already collected report '+report_date+'; authenticated publication and archive validated; WB API was not called');return
+        validate_payload(latest)
     except (ApiError,OSError,ValueError,AssertionError):pass
-    rows=catalog(token)
+    else:
+        # This also repairs an incomplete publication from the same saved response.
+        # Authentication or transport errors here must never trigger another WB call.
+        publish(latest,push_url,key)
+        print('Already collected report '+report_date+'; authenticated publication and archive validated; WB report API was not called');return
     if len(rows)>50:raise ApiError('WB report supports at most 50 items per request; explicit batch design required')
     body={'currentPeriod':{'start':report_date,'end':report_date},'nmIds':[int(x['nmID']) for x in rows.values()],**SELECTION}
     response=request(API,body,{'Authorization':token})
@@ -101,6 +103,8 @@ def publish(payload,push_url,key):
     latest_url=push_url.rsplit('/',1)[0]+'/wb-positions.json'
     actual=request(latest_url+'?verify='+str(time.time_ns()))
     assert actual==payload,'Published WB report readback mismatch'
+    history=request(push_url.rsplit('/',1)[0]+'/wb-history.json?verify='+str(time.time_ns()))
+    assert history.get(payload['report_date'])==payload,'Published WB history mismatch'
 if __name__=='__main__':
     try:main()
     except Exception as error:
