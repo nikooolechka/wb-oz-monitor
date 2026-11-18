@@ -21,8 +21,8 @@
 Куда шлём: ЧАТ ОТДЕЛА (с коллегами) — НЕ личка и НЕ канал «изменения» (три разных
 места, не путать!). chat_id чата отдела = секрет PRICES_SCREENSHOT_CHAT_ID; пока
 он не задан — НЕ шлём никуда. Бот @asfarm_changes_bot должен быть участником чата.
-Будни (пн–пт): 10:30 и 17:30, СО звуком. Выходные (сб/вс): только 10:30 и БЕЗ звука
-(disable_notification только в выходные).
+Будни (пн–пт): 10:30 и 17:30. Автоматические сообщения со звуком только
+с 09:00 до 19:59 МСК; вне этого окна и в выходные — без звука.
 
 Секреты/env: PRICES_SHEET_ID, GSHEETS_SA_JSON, TELEGRAM_BOT_TOKEN,
 PRICES_SCREENSHOT_CHAT_ID (chat_id чата отдела). DRY=1 — проверить и собрать, НЕ слать.
@@ -36,6 +36,7 @@ import requests
 from google.oauth2.service_account import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
+from notify import automatic_alert_silent
 
 MSK = timezone(timedelta(hours=3))
 SHEET = os.environ["PRICES_SHEET_ID"]
@@ -262,7 +263,7 @@ def main():
     files = {f"p{i}": p for i, p in enumerate(photos)}
     media = [{"type": "photo", "media": f"attach://p{i}", **({"caption": cap} if i == 0 else {})}
              for i in range(len(photos))]
-    silent = "true" if now.weekday() >= 5 else "false"   # без звука ТОЛЬКО в выходные; будни — со звуком
+    silent = "true" if automatic_alert_silent(now) else "false"
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMediaGroup",
                       data={"chat_id": CHAT_ID, "media": json.dumps(media, ensure_ascii=False),
                             "disable_notification": silent},

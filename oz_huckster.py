@@ -6,6 +6,7 @@
 import os, re, json, ssl, datetime, urllib.request, urllib.parse
 from google.oauth2 import service_account
 import google.auth.transport.requests as gtr
+from notify import automatic_alert_silent
 
 CTX = ssl._create_unverified_context()
 HBASE = "https://wbs.e-teleport.ru"
@@ -143,7 +144,7 @@ def read_vals(rng):
 def notify(text):
     if not TG_TOKEN:
         print("[WARN] нет TELEGRAM_BOT_TOKEN — алерт не отправлен"); return
-    silent = msk().weekday() >= 5   # выходные (сб/вс) — без звука
+    silent = automatic_alert_silent()
     body = json.dumps({"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML", "disable_notification": silent}).encode()
     r = urllib.request.Request(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=body,
         headers={"Content-Type": "application/json"})

@@ -5,6 +5,7 @@
 # ENV: ROP_APP_PASS (Яндекс app-пароль rop_mp), GSHEETS_SA_JSON|GSHEETS_SA_FILE, TELEGRAM_BOT_TOKEN, OSTATKI_CHAT_ID, DRY
 # 2026-11-16: письмо переехало на rop_mp@as-farm.ru (Яндекс 360). 2026-11-17: берём ИМЕННО «Остатки товаров ИП Шпиндовский» (HTML в zip, ~12:00) — настоящие ИП-остатки. «АВТО Остатки для маркетов» (XLSX, ~09:00) — ДРУГАЯ ООО-рассылка, её ведёт ooo_stock, тут НЕ брать.
 import os,sys,re,html,ssl,json,io,urllib.request,urllib.parse,imaplib,email,zipfile,datetime
+from notify import automatic_alert_silent
 from email.header import decode_header
 CTX=ssl._create_unverified_context()
 SID="1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"; TAB="остатки"; GID=1290662357
@@ -413,7 +414,10 @@ if png:
         boundary="----ost"; body=io.BytesIO()
         def part(n,v): body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n".encode())
         part("chat_id",CHAT); part("caption",cap); part("parse_mode","HTML")
-        if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5: part("disable_notification","true")  # выходные — без звука
+        # Ручной запрос отвечает как обычно. Плановый отчёт подчиняется общему правилу:
+        # тихо вне 09:00–20:00 МСК и в выходные.
+        if not DEMAND:
+            part("disable_notification", "true" if automatic_alert_silent() else "false")
         body.write(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"ost.png\"\r\nContent-Type: image/png\r\n\r\n".encode()); body.write(png); body.write(f"\r\n--{boundary}--\r\n".encode())
         try:
             res=json.loads(urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{TGTOK}/sendPhoto",data=body.getvalue(),headers={"Content-Type":f"multipart/form-data; boundary={boundary}"}),timeout=60,context=CTX).read()); sent=res.get("ok",False); print("отправка:",sent,"" if sent else res)

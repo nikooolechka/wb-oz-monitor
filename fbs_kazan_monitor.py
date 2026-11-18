@@ -725,7 +725,7 @@ def _alert_fail(err):
                    f"Это временный сбой на стороне Ozon/WB (НЕ смена API). Следующий прогон соберёт сам — проверка не нужна.")
         else:
             msg = f"<b>FBS-монитор упал</b>\n{str(err)[:300]}\nВозможно Ozon/WB снова сменили API — нужна проверка."
-        body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML", "disable_notification": ("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
+        body = _up.urlencode({"chat_id": c, "text": msg, "parse_mode": "HTML", "disable_notification": ("true" if notify.automatic_alert_silent() else "false")}).encode()
         urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{t}/sendMessage", data=body), context=CTX, timeout=25).read()
     except Exception:
         pass

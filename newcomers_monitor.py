@@ -11,6 +11,7 @@ import os, json, re, ssl, urllib.request
 ssl._create_default_https_context = ssl._create_unverified_context
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from notify import automatic_alert_silent
 
 PULT = "1Gz0zU-fT34Tr3LG-WSMZFVy5sgAFgjyC880_79S3Wms"           # клод-код, вкладка «остатки»
 STATE_PATH = os.environ.get("NEWCOMERS_STATE", "data/newcomers_state.json")
@@ -41,7 +42,8 @@ def tg(text):
     if DRY or not (TG_TOKEN and TG_CHAT):
         print("[DRY/no-tg]\n" + text); return
     data = urllib.parse.urlencode({"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
-        "disable_web_page_preview": "true"}).encode()
+        "disable_web_page_preview": "true",
+        "disable_notification": "true" if automatic_alert_silent() else "false"}).encode()
     try:
         urllib.request.urlopen("https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN, data=data, timeout=30)
     except Exception as e: print("tg err", str(e)[:120])

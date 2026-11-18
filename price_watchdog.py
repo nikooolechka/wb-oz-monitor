@@ -15,6 +15,7 @@ import os, json, time, re, urllib.request, urllib.parse
 from datetime import datetime, timezone, timedelta
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from notify import automatic_alert_silent
 
 MSK = timezone(timedelta(hours=3))
 SHEET_ID = os.environ["PRICES_SHEET_ID"]
@@ -74,7 +75,7 @@ def _save_state(st):
 def _tg(text):
     if not (TG_TOKEN and TG_CHAT):
         print("[watchdog] нет TELEGRAM_* — сообщение не отправлено:", text, flush=True); return
-    _wk = (__import__("datetime").datetime.utcnow() + __import__("datetime").timedelta(hours=3)).weekday() >= 5  # выходные — без звука
+    _wk = automatic_alert_silent()
     body = urllib.parse.urlencode({
         "chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
         "disable_web_page_preview": "true",

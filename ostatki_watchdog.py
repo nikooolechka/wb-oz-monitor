@@ -4,6 +4,7 @@
 #  (2) слушатель на ПК замолчал — сердцебиение (пульт Лист1!E5) устарело (>15 мин).
 # Дедуп: один алерт на проблему; при восстановлении — сбрасываем (и шлём ✅).
 import os, json, ssl, re, urllib.request, urllib.parse, datetime
+from notify import automatic_alert_silent
 CTX=ssl.create_default_context()
 try: CTX=ssl._create_unverified_context()
 except Exception: pass
@@ -15,6 +16,8 @@ STATE="data/ostatki_watchdog_state.json"
 MSK=datetime.timezone(datetime.timedelta(hours=3))
 
 def tg(method,params):
+    params = dict(params)
+    params.setdefault("disable_notification", automatic_alert_silent())
     body=json.dumps(params).encode()
     urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{TGTOK}/{method}",data=body,headers={"Content-Type":"application/json"}),context=CTX,timeout=30).read()
 def tapi(method):

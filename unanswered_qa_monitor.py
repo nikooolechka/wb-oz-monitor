@@ -3,6 +3,7 @@
 # Каждые 3 часа. После алерта пауза 24ч (отдельно для вопросов и отзывов).
 # Вопросы и отзывы — раздельно. Источник — WB feedbacks-api (бесплатно).
 import os, json, ssl, time, urllib.request, urllib.parse, datetime
+from notify import automatic_alert_silent
 
 WB=os.environ["WB_TOKEN"]; BOT=os.environ["TELEGRAM_BOT_TOKEN"]; CHAT=os.environ["TELEGRAM_CHAT_ID"]
 STATE="data/unanswered_qa_state.json"
@@ -37,7 +38,7 @@ def oldest_age_h(kind):
     return max(ages) if ages else 0.0
 
 def send(text):
-    body=urllib.parse.urlencode({"chat_id":CHAT,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true","disable_notification":("true" if (__import__("datetime").datetime.utcnow()+__import__("datetime").timedelta(hours=3)).weekday()>=5 else "false")}).encode()
+    body=urllib.parse.urlencode({"chat_id":CHAT,"text":text,"parse_mode":"HTML","disable_web_page_preview":"true","disable_notification":("true" if automatic_alert_silent() else "false")}).encode()
     urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{BOT}/sendMessage",data=body),timeout=25).read()
 
 def load():
