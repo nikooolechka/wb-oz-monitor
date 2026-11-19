@@ -1,7 +1,5 @@
 name: WB search queries for yesterday
 on:
-  schedule:
-    - cron: '0 10 * * *'  # 13:00 Moscow reserve; VPS owns 10:00 and morning retries
   workflow_dispatch:
 permissions:
   contents: read
