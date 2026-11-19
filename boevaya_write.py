@@ -8,6 +8,7 @@
 # База (ВБ C до-СПП = WB API; Озон J = Seller API; ЯМ P = Partner API) — как у ПК.
 # Формулы F/M/S и блок ДМ (U-Y) НЕ трогаем. Штампы свежести B1/H1/O1.
 import os, re, json, ssl, sys, datetime, urllib.request, urllib.parse
+from zoneinfo import ZoneInfo
 from google.oauth2 import service_account
 import google.auth.transport.requests as gtr
 
@@ -32,7 +33,7 @@ OOS_STATUSES = {"нет на складе", "out_of_stock", "нет в нали�
 STALE_H = 8   # last_update старше -> Huckster отвалился по товару (не в продаже тут ни при чём): не пишем старое число, ставим пометку
 
 def norm(s): return re.sub(r"[^a-z0-9]", "", (s or "").lower())
-def msk(): return datetime.datetime.utcnow() + datetime.timedelta(hours=3)
+def msk(): return datetime.datetime.now(ZoneInfo("Europe/Moscow")).replace(tzinfo=None)
 
 if SAJSON.startswith("{"):
     cr = service_account.Credentials.from_service_account_info(json.loads(SAJSON), scopes=["https://www.googleapis.com/auth/spreadsheets"])
@@ -45,6 +46,11 @@ def gapi(m, u, b=None):
     return json.loads(urllib.request.urlopen(r, context=CTX, timeout=90).read())
 def qq(s): return urllib.parse.quote(s)
 GID = [s["properties"]["sheetId"] for s in gapi("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{SID}?fields=sheets(properties(sheetId,title))")["sheets"] if s["properties"]["title"] == SHEET][0]
+
+snapshot=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}?ranges={qq(SHEET+'!A1:AZ100')}&includeGridData=true")
+headers=snapshot["sheets"][0]["data"][0]["rowData"][0]["values"]
+expected={2:"цена до СПП",3:"цена с спп",4:"цена с кошельком",9:"Текущая цена",10:"Цена с другими банками",11:"Цена с Озон картой",15:"Цена продажи",16:"Цена до СПП",17:"Цена с СПП"}
+for index,name in expected.items():assert headers[index].get("formattedValue","").strip().lower()==name.lower(),("Price header moved",index)
 
 # ---- Huckster ----
 def hpost(p, b):
@@ -69,7 +75,7 @@ def _stale(lu):
     try:
         dt = datetime.datetime.strptime((lu or "")[:19], "%Y-%m-%dT%H:%M:%S")
     except Exception:
-        return False
+        return True
     return (msk() - dt).total_seconds() > STALE_H * 3600
 
 def vit(rec, which):
@@ -158,7 +164,7 @@ for i, rw in enumerate(rrB):
 # Строки без nmID (нет ссылки в B и нет в WB_SKU) -> доискиваем по vendorCode через Content API.
 # Это автоматика на будущее: новый товар не требует правки кода, достаточно чтобы на WB была создана карточка
 # с vendorCode = нашему текстовому артикулу (как у всех текущих товаров).
-if any(nm is None for _, _, nm in wb_rows):
+if WB_TOKEN and os.environ.get("SKIP_WB_API") != "1" and any(nm is None for _, _, nm in wb_rows):
     VCMAP = wb_vendorcode_map()
     fixed = []
     for art, row, nm in wb_rows:
@@ -194,8 +200,17 @@ ymapi = ym_basic()
 print(f"API: wb_доСПП={len(wbapi)} oz_J={len(ozapi)} ym_P={len(ymapi)}")
 
 writes = []  # {range, value}
+source_errors = []
+if not ozapi:source_errors.append({"market":"ОЗОН","article":"Seller API","cell":"J","reason":"Нет базовых цен API"})
+if not ymapi:source_errors.append({"market":"ЯМ","article":"Partner API","cell":"P","reason":"Нет базовых цен API"})
+row_article = {("WB", row):art for art,row,_ in wb_rows}
+row_article.update({("ОЗОН", row):art for art,row in oz_rows}); row_article.update({("ЯМ", row):art for art,row in ym_rows})
 def put(col_letter, row, val):
     if val is None: return
+    market = "WB" if col_letter in ["C","D","E"] else "ОЗОН" if col_letter in ["J","K","L"] else "ЯМ"
+    if val in [ERR, STALE]:
+        source_errors.append({"market":market,"article":row_article.get((market,row),""),"cell":col_letter+str(row),"reason":val})
+        return  # Keep last verified number; never import an error into unit formulas.
     writes.append((f"{SHEET}!{col_letter}{row}", val))
 
 # ВБ: C=API до-СПП, D=Huckster mp, E=Huckster cp
@@ -237,7 +252,25 @@ ts = msk().strftime("%Y-%m-%d %H:%M")
 col_idx = {"B": 1, "H": 7, "O": 14}
 reqs = []
 for c, lbl in (("B", "ВБ"), ("H", "ОЗ"), ("O", "ЯМ")):
+    market={"B":"WB","H":"ОЗОН","O":"ЯМ"}[c]
+    errors=[x for x in source_errors if x["market"]==market]
+    note = (f"{lbl} ЧАСТИЧНОЕ обновление {ts}; не обновлены: "+", ".join(sorted({x["article"]for x in errors}))) if errors else f"{lbl} обновлено {ts} (Huckster, облако)"
     reqs.append({"updateCells": {"range": {"sheetId": GID, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": col_idx[c], "endColumnIndex": col_idx[c] + 1},
-                                 "rows": [{"values": [{"note": f"{lbl} обновлено {ts} (Huckster, облако)"}]}], "fields": "note"}})
+                                 "rows": [{"values": [{"note": note}]}], "fields": "note"}})
 gapi("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate", {"requests": reqs})
 print(f"[OK] записано {len(writes)} ячеек, штампы B1/H1/O1 {ts}")
+
+health={"checked_at":datetime.datetime.now(ZoneInfo("Europe/Moscow")).isoformat(),"errors":source_errors,"complete":not source_errors,"written_cells":len(writes)}
+os.makedirs("data",exist_ok=True)
+with open("data/price_source_health.json.tmp","w")as f:json.dump(health,f,ensure_ascii=False,indent=2)
+os.replace("data/price_source_health.json.tmp","data/price_source_health.json")
+# Read the final values back; protected formulas/format/merges are verified by the audit.
+values=col("A1:AZ100")
+for rng,value in writes:
+    address=rng.split("!")[-1]; letters=re.match(r"[A-Z]+",address).group(); row=int(re.search(r"\d+$",address).group())-1; index=0
+    for char in letters:index=index*26+ord(char)-64
+    actual=values[row][index-1]if row<len(values)and index-1<len(values[row])else ""
+    if isinstance(value,(float,int)):
+        assert abs(float(str(actual).replace(" ","").replace("\u00a0","").replace(",","."))-float(value))<0.01,(address,"readback mismatch")
+    else:assert str(actual)==str(value),(address,"readback mismatch")
+print("[PRICE_SOURCE_HEALTH] "+json.dumps(health,ensure_ascii=False))
