@@ -112,13 +112,13 @@ _TOK=[None,0]
 def sheets_tok():
     if not _TOK[0] or time.time()>_TOK[1]: _TOK[0]=_sheets_token(); _TOK[1]=time.time()+3000
     return _TOK[0]
-def sread(cell):
+def _sread_raw(cell):
     r=urllib.request.urlopen(urllib.request.Request(
         f"https://sheets.googleapis.com/v4/spreadsheets/{PULT}/values/{urllib.parse.quote(cell)}",
         headers={"Authorization":"Bearer "+sheets_tok()}))
     v=json.loads(r.read()).get("values")
     return (v[0][0] if v and v[0] else "")
-def swrite(cell,val):
+def _swrite_raw(cell,val):
     urllib.request.urlopen(urllib.request.Request(
         f"https://sheets.googleapis.com/v4/spreadsheets/{PULT}/values/{urllib.parse.quote(cell)}?valueInputOption=RAW",
         data=json.dumps({"values":[[val]]}).encode(), method="PUT",
@@ -139,6 +139,44 @@ def get(url, hdr=None, data=None, t=40):
     b=r.read()
     if b[:2]==b"\x1f\x8b": b=gzip.decompress(b)
     return b
+
+
+class PCQueueBusy(RuntimeError): pass
+_PC_EXPECTED={}
+def _pc_snapshot(cmd_cell):
+    col=cmd_cell.split('!')[1][0]
+    rng='Лист1!'+col+'1:'+col+'4'
+    u=f'https://sheets.googleapis.com/v4/spreadsheets/{PULT}?ranges={urllib.parse.quote(rng)}&includeGridData=true'
+    raw=json.loads(get(u,hdr={'Authorization':'Bearer '+sheets_tok()}))
+    sh=raw['sheets'][0]; data=sh['data'][0]; rows=data.get('rowData',[])
+    vals=[((row.get('values')or[{}])[0].get('formattedValue',''))for row in rows]
+    vals+=['']*(4-len(vals))
+    ci=ord(col)-65
+    if any(m['startColumnIndex']<=ci<m['endColumnIndex'] and m['startRowIndex']<=1<m['endRowIndex']for m in sh.get('merges',[])):raise PCQueueBusy('Merged command cell')
+    return vals
+
+def _queue_pc_command(cell,cmd):
+    import uuid
+    if cell not in [AFBOT_CMD,PRICE_CMD]:raise PCQueueBusy('Unknown PC queue')
+    before=_pc_snapshot(cell)
+    if before[1].strip() or ('PS started'in before[2] and 'PS done'not in before[2]):raise PCQueueBusy('PC queue is occupied')
+    # Read twice; never erase another command or the previous receipt.
+    current=_pc_snapshot(cell)
+    if current!=before:raise PCQueueBusy('PC queue changed before write')
+    nonce='ANALIZ_CMD_'+uuid.uuid4().hex
+    wrapped="PS:Write-Output '"+nonce+"';"+cmd.removeprefix('PS:')
+    _swrite_raw(cell,wrapped)
+    _PC_EXPECTED['Лист1!'+cell.split('!')[1][0]+'1']=nonce
+    if _sread_raw(cell)not in ['',wrapped]:raise PCQueueBusy('Command ownership changed')
+
+def sread(cell):
+    val=_sread_raw(cell)
+    marker=_PC_EXPECTED.get(cell)
+    return val if not marker or marker in val else ''
+def swrite(cell,val):
+    if cell in [AFBOT_LOG,PRICE_LOG] and val=='':return
+    if cell in [AFBOT_CMD,PRICE_CMD]:return _queue_pc_command(cell,val)
+    return _swrite_raw(cell,val)
 
 # ---------- WB сбор (облако) ----------
 def basket_host(vol):
@@ -387,7 +425,7 @@ def ym_collect(url, timeout=1200):
            f"Start-Process -FilePath $py -ArgumentList @(\"$d\\ym_card_pc.py\",\"{clean}\",\"{nonce}\") -WindowStyle Hidden")
     # ФОЛБЭК как у oz_collect: перебираем живые ПК (af-bot первым, Lazareva запасным). Если af-bot
     # не отдаёт результат (ERR/таймаут) — повторяем на Lazareva тем же nonce (результат идёт в N1).
-    _live = _pults_live() or [("Lazareva", PRICE_CMD, PRICE_LOG)]
+    _live = _pults_live()
     per_pc = max(360, int(timeout / max(1, len(_live))))  # делим бюджет времени между ПК
     for pcname, CMD, LOG in _live:
         swrite(CMD, _ymcmd)   # открепл. запуск на этом ПК; результат придёт в N1 (по nonce)
@@ -1548,7 +1586,7 @@ def process_one():
     swrite(BUSY_CELL,"1 "+today())
     line=lines[0]; parts=line.split("|")
     msgid=parts[0]; chat=parts[1]; url=parts[2]; who=parts[3] if len(parts)>3 else ""
-    an=None
+    an=None; deferred=False
     try:
         def _do_collect():
             if re.search(r"ozon\.", url):
@@ -1601,7 +1639,7 @@ def process_one():
             # честно просим повторить, чтобы собрать всё (владелец, 2026-10-24).
             tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: не подтянулось фото товара, не опубликовал\n{url}")
             data=None
-        elif not (YGPT_KEY or GEMINI_KEY or ANTHROPIC_KEY):
+        elif not ((DIFY_KEY and DIFY_URL) or CF_AI_TOKEN or YGPT_KEY or GEMINI_KEY or ANTHROPIC_KEY):
             tg_msg(OWNER_CHAT,"🔴 Бот-аналитик: НЕТ НИ ОДНОГО ключа ИИ (YandexGPT/Gemini/Claude). Разбор невозможен.")
             an = None
         else:
@@ -1700,15 +1738,18 @@ def process_one():
             else:
                 _wd_th.join(timeout=2)  # не бросаем поток висеть
                 tg_msg(OWNER_CHAT, f"🔴 Бот-аналитик: MPStats-разделы не собрались, не опубликовал\n{url}")
+    except PCQueueBusy:
+        deferred=True
     finally:
         q2=sread(QUEUE_CELL); rest=[x for x in q2.split("\n") if x.strip() and not x.startswith(msgid+"|")]
-        swrite(QUEUE_CELL,"\n".join(rest)); swrite(BUSY_CELL,"")
-    return "done" if lines else "empty"
+        if not deferred:swrite(QUEUE_CELL,"\n".join(rest))
+        swrite(BUSY_CELL,"")
+    return "waiting_pc_queue"if deferred else ("done"if lines else"empty")
 
 if __name__ == "__main__":
     n=0
     while n<5:
         r=process_one()
-        if r=="empty": break
+        if r in ['empty','maint','waiting_pc_queue']:break
         n+=1
-    print("обработано:",n)
+    print(json.dumps({'ok':True,'processed':n,'status':r},ensure_ascii=False))
