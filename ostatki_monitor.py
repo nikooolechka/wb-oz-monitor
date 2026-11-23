@@ -368,6 +368,7 @@ else:
                 vw.append({"range":f"{TAB}!D{row}","values":[['=SPARKLINE('+str(bar)+';{"charttype"\\"bar";"max"\\100;"color1"\\"'+col+'";"empty"\\"zero"})']]})  # БАР в D (самодостаточный)
                 fmt.append({"repeatCell":{"range":{"sheetId":OSTGID,"startRowIndex":i,"endRowIndex":i+1,"startColumnIndex":9,"endColumnIndex":10},"cell":{"userEnteredFormat":{"numberFormat":{"type":"PERCENT","pattern":"0%"}}},"fields":"userEnteredFormat.numberFormat"}})
             else:
+                vw.append({"range":f"{TAB}!J{row}","values":[[""]]})  # Без цели процент не определён.
                 vw.append({"range":f"{TAB}!D{row}","values":[[""]]})   # нет потребности -> чистим шкалу (не оставляем #REF!)
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values:batchUpdate",{"valueInputOption":"USER_ENTERED","data":vw})
         if fmt: gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":fmt})
