@@ -322,7 +322,7 @@ else:
         strows=[[k,newst[k][0],newst[k][1],newst[k][2]] for k in newst]
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1:D300')}:clear",{})
         if strows: gapi("PUT",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(ST+chr(33)+'A1')}?valueInputOption=USER_ENTERED",{"values":strows})
-        _dg=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+chr(33)+'A1:L80')}").get("values",[])
+        _dg=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{DG}/values/{urllib.parse.quote(DGTAB+chr(33)+'A1:L80')}?valueRenderOption=UNFORMATTED_VALUE").get("values",[])
         _dh=[str(x).lower() for x in _dg[0]]
         def _fd(*kk):
             for i,h in enumerate(_dh):
@@ -332,8 +332,13 @@ else:
         for r in _dg[1:]:
             a=(r[_ia] if len(r)>_ia else "").strip()
             if not a or a.lower()=="тотал": continue
-            v=n1c(r[_ip] if len(r)>_ip else ""); c=_cn(a)
-            if c not in potra and v: potra[c]=v
+            raw_goal = "".join(str(r[_ip]).split()) if len(r) > _ip else ""
+            if not re.fullmatch(r"[0-9]+(?:[.,]0+)?", raw_goal):
+                continue
+            goal = int(re.split(r"[.,]", raw_goal)[0])
+            key = _cn(a)
+            if key not in potra or potra[key] == 0:
+                potra[key] = goal
         # расширить сетку до 11 столбцов (бар D + служебные H/I/J)
         gapi("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}:batchUpdate",{"requests":[{"updateSheetProperties":{"properties":{"sheetId":OSTGID,"gridProperties":{"columnCount":11}},"fields":"gridProperties.columnCount"}}]})
         ov2=gapi("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{SID}/values/{urllib.parse.quote(TAB+chr(33)+'A1:K80')}").get("values",[])
@@ -356,12 +361,14 @@ else:
             ost=n1c(r[2]) if len(r)>2 else 0                                 # ОСТАТОК (Свободно, столбец C)
             vw.append({"range":f"{TAB}!H{row}","values":[[prod]]})          # произведено (служебн., для истории)
             vw.append({"range":f"{TAB}!I{row}","values":[[pot if pot is not None else ""]]})  # потребность=цель (долг+след.мес)
-            if pot:
+            if pot is not None:
                 # 🔴 ШКАЛА = ПРОИЗВЕДЕНО / ЦЕЛЬ (владелец 2026-11-17): сколько из плана (долг пред.мес + потр тек.мес)
                 #    УЖЕ ПРОИЗВЕЛИ (прибавилось на склад). Отгрузка на МП роняет ОСТАТОК, но шкалу НЕ трогает —
                 #    «произведено» (H) копит только приходы, при отгрузке не уменьшается. Иначе смысл шкалы теряется.
-                pct=(prod/pot) if pot else 0; vw.append({"range":f"{TAB}!J{row}","values":[[pct]]})           # % выполнения (служебн.)
-                col=_gh(pct)
+                # Подтверждённая нулевая цель закрыта. При нуле отношение произведённого к цели не определено.
+                pct = prod / pot if pot else 1
+                vw.append({"range": f"{TAB}!J{row}", "values": [[pct if pot else ""]]})
+                col = _gh(1.2 if pot == 0 and prod > 0 else pct)
                 bar=max(0,min(int(round(pct*100)),100))   # доля заливки 0..100 ЛИТЕРАЛОМ в формулу
                 # число зашито ПРЯМО в SPARKLINE, без ссылок на H/I -> шкала НЕ ломается (#REF!), если владелец
                 # удалит/сдвинет служебные колонки потребность/%. Цвет-градиент — по реальному pct.
